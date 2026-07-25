@@ -1,0 +1,533 @@
+{
+  "enabled_sources": [
+    "gbif",
+    "pteridoportal",
+    "cvh",
+    "cnh",
+    "avh",
+    "reflora",
+    "k",
+    "kag",
+    "p",
+    "bm",
+    "b",
+    "us",
+    "ny",
+    "l",
+    "mo",
+    "ucjeps",
+    "mich",
+    "f",
+    "e",
+    "flas",
+    "ti",
+    "tns",
+    "tai",
+    "taif",
+    "hast",
+    "sing",
+    "bo"
+  ],
+  "continue_on_source_error": true,
+  "gbif": {
+    "handler": "gbif",
+    "page_size": 100,
+    "request_delay_seconds": 1.0,
+    "image_delay_seconds": 1.0,
+    "max_pages_per_name": 100,
+    "occurrence_mode": "specimens",
+    "coordinate_filter": "any",
+    "media_policy": "best-per-occurrence"
+  },
+  "pteridoportal": {
+    "handler": "symbiota",
+    "base_url": "https://www.pteridoportal.org/portal",
+    "search_url": "https://www.pteridoportal.org/portal/collections/list.php?db=all&taxa={query}&usethes=1&taxontype=2&showimages=1&page={page}",
+    "request_delay_seconds": 2.0,
+    "image_delay_seconds": 2.0,
+    "max_pages_per_name": 5,
+    "specimens_only": true,
+    "exact_name_filter": false
+  },
+  "cvh": {
+    "handler": "cvh",
+    "request_delay_seconds": 4.0,
+    "image_delay_seconds": 4.0,
+    "page_size": 30,
+    "max_pages_per_name": 50,
+    "search_url": "https://www.cvh.ac.cn/spms/list.php?taxonName={query}&page={page}",
+    "record_link_pattern": "detail\\.php\\?id=[A-Za-z0-9_-]+",
+    "api_url": "https://www.cvh.ac.cn/controller/spms/list.php",
+    "detail_api_url": "https://www.cvh.ac.cn/controller/spms/detail.php",
+    "detail_url": "https://www.cvh.ac.cn/spms/detail.php?id={id}",
+    "image_url": "https://image.cvh.ac.cn/files/l/{institutionCode}/{collectionCode}.jpg",
+    "with_photo_only": true,
+    "verify_tls": false,
+    "image_verify_tls": false,
+    "image_license": "http://creativecommons.org/licenses/by-nc-nd/4.0/"
+  },
+  "cnh": {
+    "handler": "symbiota",
+    "base_url": "https://neherbaria.org/portal",
+    "search_url": "https://neherbaria.org/portal/collections/list.php?db=all&taxa={query}&usethes=1&taxontype=2&showimages=1&page={page}",
+    "request_delay_seconds": 2.0,
+    "image_delay_seconds": 2.0,
+    "max_pages_per_name": 5,
+    "specimens_only": true,
+    "exact_name_filter": false
+  },
+  "avh": {
+    "handler": "ala",
+    "api_url": "https://api.ala.org.au/occurrences/occurrences/search",
+    "record_url": "https://avh.ala.org.au/occurrences/{uuid}",
+    "request_delay_seconds": 1.5,
+    "image_delay_seconds": 1.5,
+    "page_size": 100,
+    "max_pages_per_name": 10,
+    "specimens_only": true,
+    "exact_name_filter": true
+  },
+  "reflora": {
+    "handler": "jabot",
+    "api_url": "https://servicos.jbrj.gov.br/v2/jabot/occurrence/{species}/{genus}/{family}",
+    "request_delay_seconds": 1.5,
+    "image_delay_seconds": 1.5
+  },
+  "k": {
+    "handler": "multi",
+    "image_delay_seconds": 1.5,
+    "source_note": "Kew Data Portal is checked explicitly, but scripted access currently reaches a browser access-check.",
+    "components": [
+      {
+        "component_name": "kew_data_portal",
+        "handler": "blocked",
+        "blocked_reason": "Kew Data Portal public search currently requires browser access-check handling."
+      }
+    ]
+  },
+  "kag": {
+    "handler": "multi",
+    "image_delay_seconds": 1.5,
+    "source_note": "KAG is searched directly through the Kagoshima University Museum Vascular Plants Database.",
+    "components": [
+      {
+        "component_name": "kag_vascular_plants",
+        "handler": "kag",
+        "search_url": "https://dbs.kaum.kagoshima-u.ac.jp/musedb/s_plant/s_plant.php",
+        "request_delay_seconds": 2.0,
+        "page_size": 50,
+        "max_pages_per_name": 20,
+        "exact_name_filter": true,
+        "rights_holder": "The Kagoshima University Museum",
+        "image_license": "rights_reserved",
+        "rights_note": "KAG herbarium page states personal use is permitted; contact Kagoshima University Museum for broad redistribution or commercial use."
+      }
+    ]
+  },
+  "p": {
+    "handler": "multi",
+    "image_delay_seconds": 1.5,
+    "source_note": "MNHN/P has its own search form and is not assumed complete in GBIF, but scripted direct result access is currently protected.",
+    "components": [
+      {
+        "component_name": "mnhn_p_direct",
+        "handler": "blocked",
+        "blocked_reason": "MNHN collection search form is public, but automated result retrieval is currently protected. Use direct seed URLs for manual additions."
+      }
+    ]
+  },
+  "bm": {
+    "handler": "nhm",
+    "api_url": "https://data.nhm.ac.uk/api/3/action/datastore_search",
+    "resource_id": "05ff2255-c38a-40c9-b657-4ccb55ab2feb",
+    "record_url": "https://data.nhm.ac.uk/object/{id}",
+    "request_delay_seconds": 1.5,
+    "image_delay_seconds": 1.5,
+    "page_size": 100,
+    "max_pages_per_name": 20,
+    "exact_name_filter": true
+  },
+  "b": {
+    "handler": "multi",
+    "image_delay_seconds": 1.5,
+    "source_note": "B is searched directly through the public JACQ/BGBM JSON API.",
+    "components": [
+      {
+        "component_name": "jacq_b",
+        "handler": "jacq",
+        "api_url": "https://api.jacq.org/v1/objects/specimens",
+        "image_list_url": "https://api.jacq.org/v1/images/list/{specimen_id}",
+        "institution_codes": ["B"],
+        "request_delay_seconds": 1.5,
+        "page_size": 50,
+        "max_pages_per_name": 20,
+        "with_images_only": true,
+        "preferred_image_size": "europeana",
+        "exact_name_filter": true
+      }
+    ]
+  },
+  "us": {
+    "handler": "multi",
+    "image_delay_seconds": 1.5,
+    "source_note": "US is searched through the public NMNH Botany Collections JSON search and PteridoPortal.",
+    "components": [
+      {
+        "component_name": "nmnh_us",
+        "handler": "nmnh",
+        "search_page_url": "https://collections.nmnh.si.edu/search/botany/",
+        "api_url": "https://collections.nmnh.si.edu/search/botany/search.php",
+        "request_delay_seconds": 1.5,
+        "page_size": 10,
+        "max_pages_per_name": 20,
+        "image_width": 1600,
+        "exact_name_filter": true
+      },
+      {
+        "component_name": "pteridoportal_us",
+        "handler": "symbiota",
+        "base_url": "https://www.pteridoportal.org/portal",
+        "search_url": "https://www.pteridoportal.org/portal/collections/list.php?db=all&taxa={query}&usethes=1&taxontype=2&showimages=1&page={page}",
+        "institution_codes": ["US", "USNM"],
+        "request_delay_seconds": 2.0,
+        "max_pages_per_name": 5,
+        "specimens_only": true,
+        "exact_name_filter": false
+      }
+    ]
+  },
+  "ny": {
+    "handler": "multi",
+    "image_delay_seconds": 1.5,
+    "source_note": "NYBG Virtual Herbarium was checked for direct public access, but scripted result access currently requires Cloudflare Turnstile human verification. NY is searched through PteridoPortal where available.",
+    "components": [
+      {
+        "component_name": "pteridoportal_ny",
+        "handler": "symbiota",
+        "base_url": "https://www.pteridoportal.org/portal",
+        "search_url": "https://www.pteridoportal.org/portal/collections/list.php?db=all&taxa={query}&usethes=1&taxontype=2&showimages=1&page={page}",
+        "institution_codes": ["NY"],
+        "request_delay_seconds": 2.0,
+        "max_pages_per_name": 5,
+        "specimens_only": true,
+        "exact_name_filter": false
+      }
+    ]
+  },
+  "l": {
+    "handler": "multi",
+    "image_delay_seconds": 1.5,
+    "source_note": "L/Naturalis is searched through the Netherlands Biodiversity API.",
+    "components": [
+      {
+        "component_name": "naturalis_l",
+        "handler": "naturalis",
+        "api_url": "https://api.biodiversitydata.nl/v2/specimen/query/",
+        "source_system_code": "BRAHMS",
+        "request_delay_seconds": 1.5,
+        "page_size": 100,
+        "max_pages_per_name": 20,
+        "exact_name_filter": true
+      }
+    ]
+  },
+  "mo": {
+    "handler": "multi",
+    "image_delay_seconds": 1.5,
+    "source_note": "MO is searched through the official Tropicos Web Services when TROPICOS_API_KEY is configured, then PteridoPortal.",
+    "components": [
+      {
+        "component_name": "tropicos_mo",
+        "handler": "tropicos",
+        "api_url": "https://services.tropicos.org",
+        "record_url": "https://www.tropicos.org/specimen/{id}",
+        "credential_env": "TROPICOS_API_KEY",
+        "credential_type": "Tropicos API key",
+        "credential_application_url": "https://services.tropicos.org/help?requestkey",
+        "request_delay_seconds": 1.5,
+        "page_size": 50,
+        "exact_name_filter": true
+      },
+      {
+        "component_name": "pteridoportal_mo",
+        "handler": "symbiota",
+        "base_url": "https://www.pteridoportal.org/portal",
+        "search_url": "https://www.pteridoportal.org/portal/collections/list.php?db=all&taxa={query}&usethes=1&taxontype=2&showimages=1&page={page}",
+        "institution_codes": ["MO"],
+        "request_delay_seconds": 2.0,
+        "max_pages_per_name": 5,
+        "specimens_only": true,
+        "exact_name_filter": false
+      }
+    ]
+  },
+  "ucjeps": {
+    "handler": "multi",
+    "image_delay_seconds": 1.5,
+    "source_note": "UC/JEPS is searched directly through CCH2/Symbiota.",
+    "components": [
+      {
+        "component_name": "cch2_ucjeps",
+        "handler": "symbiota",
+        "base_url": "https://cch2.org/portal",
+        "search_url": "https://cch2.org/portal/collections/list.php?db=all&taxa={query}&usethes=1&taxontype=2&showimages=1&page={page}",
+        "institution_codes": ["UC", "JEPS"],
+        "request_delay_seconds": 2.0,
+        "max_pages_per_name": 5,
+        "specimens_only": true,
+        "exact_name_filter": false
+      }
+    ]
+  },
+  "mich": {
+    "handler": "multi",
+    "image_delay_seconds": 1.5,
+    "source_note": "MICH is searched directly through PteridoPortal where available.",
+    "components": [
+      {
+        "component_name": "pteridoportal_mich",
+        "handler": "symbiota",
+        "base_url": "https://www.pteridoportal.org/portal",
+        "search_url": "https://www.pteridoportal.org/portal/collections/list.php?db=all&taxa={query}&usethes=1&taxontype=2&showimages=1&page={page}",
+        "institution_codes": ["MICH"],
+        "request_delay_seconds": 2.0,
+        "max_pages_per_name": 5,
+        "specimens_only": true,
+        "exact_name_filter": false
+      }
+    ]
+  },
+  "f": {
+    "handler": "multi",
+    "image_delay_seconds": 1.5,
+    "source_note": "F is searched through PteridoPortal where available.",
+    "components": [
+      {
+        "component_name": "pteridoportal_f",
+        "handler": "symbiota",
+        "base_url": "https://www.pteridoportal.org/portal",
+        "search_url": "https://www.pteridoportal.org/portal/collections/list.php?db=all&taxa={query}&usethes=1&taxontype=2&showimages=1&page={page}",
+        "institution_codes": ["F"],
+        "request_delay_seconds": 2.0,
+        "max_pages_per_name": 5,
+        "specimens_only": true,
+        "exact_name_filter": false
+      }
+    ]
+  },
+  "e": {
+    "handler": "multi",
+    "image_delay_seconds": 1.5,
+    "source_note": "E/RBGE is searched through the RBGE online catalogue/RDF.",
+    "components": [
+      {
+        "component_name": "rbge_e",
+        "handler": "rbge",
+        "search_url": "https://data.rbge.org.uk/search/herbarium/?barcode=&cfg=vherb.cfg&coll_name=&coll_num=&country_name=&family=&genus={genus}&keywords=&region=&species={species}",
+        "record_link_pattern": "/herb/E\\d+",
+        "request_delay_seconds": 1.5,
+        "max_pages_per_name": 1,
+        "iiif_width": 2400,
+        "exact_name_filter": false
+      }
+    ]
+  },
+  "flas": {
+    "handler": "multi",
+    "image_delay_seconds": 1.5,
+    "source_note": "FLAS is searched through PteridoPortal where available.",
+    "components": [
+      {
+        "component_name": "pteridoportal_flas",
+        "handler": "symbiota",
+        "base_url": "https://www.pteridoportal.org/portal",
+        "search_url": "https://www.pteridoportal.org/portal/collections/list.php?db=all&taxa={query}&usethes=1&taxontype=2&showimages=1&page={page}",
+        "institution_codes": ["FLAS"],
+        "request_delay_seconds": 2.0,
+        "max_pages_per_name": 5,
+        "specimens_only": true,
+        "exact_name_filter": false
+      }
+    ]
+  },
+  "ti": {
+    "handler": "multi",
+    "image_delay_seconds": 1.5,
+    "source_note": "TI is searched directly through the University of Tokyo fern type collection database.",
+    "components": [
+      {
+        "component_name": "ti_type_database",
+        "handler": "ti_type",
+        "search_form_url": "https://umdb.um.u-tokyo.ac.jp/DShokubu/herbarium_ferns/en/Collection/search.php?-langTop=jp",
+        "search_result_url": "https://umdb.um.u-tokyo.ac.jp/DShokubu/herbarium_ferns/en/Collection/searchresult.php?-langTop=jp",
+        "request_delay_seconds": 2.0,
+        "page_size": 25,
+        "max_pages_per_name": 5,
+        "image_variant": "2048",
+        "exact_name_filter": true
+      }
+    ]
+  },
+  "tns": {
+    "handler": "multi",
+    "image_delay_seconds": 1.5,
+    "source_note": "TNS is searched directly through the National Museum of Nature and Science WebMuseum specimen database for vascular plant specimens.",
+    "components": [
+      {
+        "component_name": "tns_webmuseum_vascular",
+        "handler": "tns_webmuseum",
+        "search_url": "https://db.kahaku.go.jp/CrossSearch/list?secIdx=0&cls=top&pn={page}&chkCls=col_b1_01&c1_f={query}&c1_a=1&c1_l=1&dispnum={page_size}",
+        "request_delay_seconds": 2.0,
+        "page_size": 50,
+        "max_pages_per_name": 5,
+        "exact_name_filter": true,
+        "media_size": "S",
+        "media_suffix": "c2510"
+      }
+    ]
+  },
+  "tai": {
+    "handler": "multi",
+    "image_delay_seconds": 1.5,
+    "source_note": "TAI is searched directly through Plants of Taiwan/TAI2 species pages when configured.",
+    "components": [
+      {
+        "component_name": "tai2",
+        "handler": "tai2",
+        "request_delay_seconds": 2.0,
+        "max_pages_per_name": 1,
+        "exact_name_filter": true,
+        "species_pages": {
+          "Haplopteris mediosora": [
+            "https://tai2.ntu.edu.tw/species/121%20003%2005%200",
+            "https://tai2.ntu.edu.tw/species/121%20003%2003%200"
+          ],
+          "Vittaria mediosora": [
+            "https://tai2.ntu.edu.tw/species/121%20003%2003%200"
+          ]
+        },
+        "name_equivalents": {
+          "Haplopteris mediosora": ["Haplopteris mediosora", "Vittaria mediosora"],
+          "Vittaria mediosora": ["Vittaria mediosora"]
+        }
+      }
+    ]
+  },
+  "taif": {
+    "handler": "taif",
+    "request_delay_seconds": 3.0,
+    "image_delay_seconds": 3.0,
+    "max_pages_per_name": 1,
+    "normal_search_url": "https://taif.tfri.gov.tw/search/result.php?genus={genus}&species={species}&l=Eng&ol=1",
+    "type_search_url": "https://taif.tfri.gov.tw/search/type/?keyword={query}&qf=keyword&l=Eng",
+    "record_link_pattern": "(?:type/)?specimen\\.php\\?[^\\\"'<> ]+",
+    "verify_tls": false,
+    "image_verify_tls": false
+  },
+  "hast": {
+    "handler": "multi",
+    "image_delay_seconds": 1.5,
+    "source_note": "HAST has a public Taiwan IPT/DwC-A dataset; this version records the direct archive status, but direct image mapping is not configured.",
+    "components": [
+      {
+        "component_name": "hast_ipt",
+        "handler": "blocked",
+        "blocked_reason": "HAST IPT/DwC-A metadata are public, but direct image mapping is not configured in this version."
+      }
+    ]
+  },
+  "sing": {
+    "handler": "multi",
+    "image_delay_seconds": 1.5,
+    "source_note": "SING is checked through its official Singapore Herbarium BRAHMS Online URL when reachable. The official BRAHMS URL currently redirects to the BRAHMS website list, so direct automated rows may be unavailable until SING republishes the public endpoint.",
+    "components": [
+      {
+        "component_name": "sing_brahms",
+        "handler": "brahms_bol",
+        "base_url": "https://herbaria.plants.ox.ac.uk/bol/sing",
+        "explore_url": "https://herbaria.plants.ox.ac.uk/bol/sing/Explore?genus={genus}&sp1={species}&view=images",
+        "institution_code": "SING",
+        "collection_code": "SING",
+        "rights_holder": "Singapore Botanic Gardens Herbarium",
+        "request_delay_seconds": 2.0
+      }
+    ]
+  },
+  "bo": {
+    "handler": "multi",
+    "image_delay_seconds": 1.5,
+    "source_note": "BO is searched directly through public Herbarium Bogoriense/BRIN Darwin Core Archives on GBIF Asia IPT.",
+    "components": [
+      {
+        "component_name": "bo_brin_dwca",
+        "handler": "dwca",
+        "institution_code": "BO",
+        "collection_code": "BO",
+        "rights_holder": "Herbarium Bogoriense, National Research and Innovation Agency (BRIN)",
+        "image_license": "CC-BY-NC",
+        "request_delay_seconds": 1.5,
+        "max_pages_per_name": 1,
+        "exact_name_filter": true,
+        "record_url_template": "https://www.gbif.org/occurrence/search?occurrence_id={occurrenceID}",
+        "archives": [
+          {
+            "name": "Type collections of Fagaceae at Herbarium Bogoriense (BO), Indonesia",
+            "archive_url": "https://cloud.gbif.org/asia/archive.do?r=fagaceae",
+            "dataset_url": "https://www.gbif.org/dataset/f604118a-f199-4b16-8242-e8e2ec15bf6b",
+            "institution_code": "BO"
+          },
+          {
+            "name": "Type collections of Ebenaceae at Herbarium Bogoriense (BO), Indonesia",
+            "archive_url": "https://cloud.gbif.org/asia/archive.do?r=ebenaceae",
+            "dataset_url": "https://www.gbif.org/dataset/34742b20-41b1-4996-826f-b6565545ac10",
+            "institution_code": "BO"
+          },
+          {
+            "name": "Type collections of Nepenthaceae at the Herbarium Bogoriense (BO), Indonesia",
+            "archive_url": "https://cloud.gbif.org/asia/archive.do?r=nepenthaceae",
+            "dataset_url": "https://www.gbif.org/dataset/7280afd1-2891-438e-9119-1798d4c8e99a",
+            "institution_code": "BO"
+          },
+          {
+            "name": "Type Collections of Magnoliopsida at Herbarium Bogoriense",
+            "archive_url": "https://cloud.gbif.org/asia/archive.do?r=magnoliopsida",
+            "dataset_url": "https://www.gbif.org/dataset/6e5319b3-a870-4b5d-a194-e1a9c4ad8845",
+            "institution_code": "BO"
+          },
+          {
+            "name": "Type collections of Liliopsida at Herbarium Bogoriense (BO), Indonesia",
+            "archive_url": "https://cloud.gbif.org/asia/archive.do?r=liliopsida",
+            "dataset_url": "https://www.gbif.org/dataset/7a2f7af2-9144-4fb0-b909-406092d81bee",
+            "institution_code": "BO"
+          },
+          {
+            "name": "Type collections of Fabaceae at Herbarium Bogoriense (BO), Indonesia",
+            "archive_url": "https://cloud.gbif.org/asia/archive.do?r=fabaceae",
+            "dataset_url": "https://www.gbif.org/dataset/2c5ff9b6-6ff7-4bd3-b348-09a9a92d0e2f",
+            "institution_code": "BO"
+          },
+          {
+            "name": "Type collections of Pteridophyte at Herbarium Bogoriense (BO), Indonesia",
+            "archive_url": "https://cloud.gbif.org/asia/archive.do?r=pteridophyte",
+            "dataset_url": "https://www.gbif.org/dataset/61a7cffa-34aa-4006-a1d0-afcd3db3ba14",
+            "institution_code": "BO"
+          }
+        ]
+      }
+    ]
+  },
+  "download": {
+    "minimum_image_width": 800,
+    "minimum_image_height": 800,
+    "minimum_image_bytes": 50000,
+    "max_image_dimension": 2400,
+    "jpeg_quality": 88,
+    "timeout_seconds": 60,
+    "retry_count": 4,
+    "retry_backoff_seconds": 5.0,
+    "image_timeout_seconds": 20,
+    "image_retry_count": 2,
+    "image_retry_backoff_seconds": 2.0,
+    "try_gbif_image_cache": true
+  }
+}
