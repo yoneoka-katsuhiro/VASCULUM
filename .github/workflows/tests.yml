@@ -7,6 +7,9 @@ on:
 jobs:
   offline-tests:
     runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: herbarium_specimen_collector
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
