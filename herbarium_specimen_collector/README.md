@@ -15,13 +15,44 @@ Version: `v0.1.2`
 
 ## Setup
 
+After cloning or downloading `VASCULUM`, enter this pipeline directory. If you
+download the GitHub ZIP archive instead of using `git clone`, the folder may be
+named `VASCULUM-main`.
+
 ```bash
-cd herbarium_specimen_collector
+cd VASCULUM/herbarium_specimen_collector
 bash setup_mac.sh
 ```
 
 The setup script creates `.venv` and installs the packages listed in
 `requirements.txt`. It does not upgrade or replace the system Python or pip.
+
+## Recommended First Run
+
+Validate the configuration before making network requests or writing output
+files:
+
+```bash
+bash run_collect_specimens.sh \
+  --contact-email "your.email@example.com" \
+  --dry-run \
+  --taxon "Haplopteris mediosora" \
+  --synonym "Vittaria mediosora"
+```
+
+For the first real data run, the low image-resolution profile is a practical
+starting point:
+
+```bash
+bash run_collect_specimens.sh \
+  --contact-email "your.email@example.com" \
+  --taxon "Haplopteris mediosora" \
+  --synonym "Vittaria mediosora" \
+  --image-resolution low \
+  --output output/Haplopteris_mediosora_low
+```
+
+This keeps the run separate from any previous default output directory.
 
 ## Run
 
@@ -42,28 +73,45 @@ Useful examples:
 
 ```bash
 # Validate configuration without network requests or output files
-bash run_collect_specimens.sh --dry-run \
-  --taxon "Haplopteris mediosora"
+bash run_collect_specimens.sh \
+  --contact-email "your.email@example.com" \
+  --dry-run \
+  --taxon "Haplopteris mediosora" \
+  --synonym "Vittaria mediosora"
 
 # Metadata only
-bash run_collect_specimens.sh --skip-images \
+bash run_collect_specimens.sh \
+  --contact-email "your.email@example.com" \
+  --skip-images \
   --taxon "Haplopteris mediosora" \
-  --synonym "Vittaria mediosora"
+  --synonym "Vittaria mediosora" \
+  --output output/Haplopteris_mediosora_metadata
 
 # Smaller image files
-bash run_collect_specimens.sh --image-resolution low \
+bash run_collect_specimens.sh \
+  --contact-email "your.email@example.com" \
+  --image-resolution low \
   --taxon "Haplopteris mediosora" \
-  --synonym "Vittaria mediosora"
+  --synonym "Vittaria mediosora" \
+  --output output/Haplopteris_mediosora_low
 
 # Selected sources and a small trial limit
 bash run_collect_specimens.sh \
+  --contact-email "your.email@example.com" \
   --sources gbif,tns,kag,taif \
   --limit 10 \
-  --taxon "Haplopteris mediosora"
+  --taxon "Haplopteris mediosora" \
+  --synonym "Vittaria mediosora" \
+  --image-resolution low \
+  --output output/Haplopteris_mediosora_trial
 
 # Save terminal progress only when a log is needed
 bash run_collect_specimens.sh \
+  --contact-email "your.email@example.com" \
   --taxon "Haplopteris mediosora" \
+  --synonym "Vittaria mediosora" \
+  --image-resolution low \
+  --output output/Haplopteris_mediosora_low \
   > result_paths.txt 2> run.log
 ```
 

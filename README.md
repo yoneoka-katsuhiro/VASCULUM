@@ -20,6 +20,39 @@ Voucher Archive Search and Curation for Unified Large-scale Use of Metadata
 | --- | --- |
 | `herbarium_specimen_collector/` | Retrieve and integrate Darwin Core (DwC)-oriented herbarium specimen datasets and associated specimen images from multiple digital archives. |
 
+## First Run
+
+After cloning or downloading this repository, enter the pipeline directory and
+run the setup script once. If you download the GitHub ZIP archive instead of
+using `git clone`, the folder may be named `VASCULUM-main`.
+
+```bash
+cd VASCULUM/herbarium_specimen_collector
+bash setup_mac.sh
+```
+
+Then run a small validation command:
+
+```bash
+bash run_collect_specimens.sh \
+  --contact-email "your.email@example.com" \
+  --dry-run \
+  --taxon "Haplopteris mediosora" \
+  --synonym "Vittaria mediosora"
+```
+
+For a practical first data run, use the low image-resolution profile and a
+separate output directory:
+
+```bash
+bash run_collect_specimens.sh \
+  --contact-email "your.email@example.com" \
+  --taxon "Haplopteris mediosora" \
+  --synonym "Vittaria mediosora" \
+  --image-resolution low \
+  --output output/Haplopteris_mediosora_low
+```
+
 ## Current Scope
 
 The current pipeline searches by scientific name, merges duplicate portal
