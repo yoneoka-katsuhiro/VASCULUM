@@ -106,7 +106,7 @@ def write_summary(path: Path, report: RunReport) -> None:
     merged_count = max(0, report.records_found - len(report.records))
 
     lines = [
-        f"Herbarium Specimen Collector {report.version}",
+        f"VASCULUM {report.version}",
         "",
         f"Run started: {report.started_at.isoformat(timespec='seconds')}",
         f"Run finished: {finished_at.isoformat(timespec='seconds')}",

@@ -18,7 +18,7 @@ def split_csv(value: str) -> list[str]:
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
-        description="Collect public herbarium specimen metadata and images."
+        description="VASCULUM: collect public herbarium specimen metadata and images."
     )
     parser.add_argument("--taxon", help="Accepted scientific name.")
     parser.add_argument(

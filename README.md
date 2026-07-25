@@ -1,9 +1,26 @@
-# Herbarium Specimen Collector
+# VASCULUM
 
-Herbarium Specimen Collector searches public specimen databases by scientific
-name, merges duplicate portal records that represent the same physical
-specimen, and downloads linked specimen images at a practical research
-resolution.
+VASCULUM retrieves and integrates Darwin Core (DwC)-oriented herbarium specimen
+datasets and associated specimen images from multiple digital archives. It
+searches by scientific name, merges duplicate portal records that represent the
+same physical specimen, and downloads linked specimen images at a practical
+research resolution.
+
+The name refers to a vasculum, a portable botanical collecting case used to hold
+plant specimens during fieldwork. This project is intended to function as a
+virtual vasculum for gathering, organizing, and holding digital herbarium
+specimen records and images.
+
+VASCULUM can also be read as:
+
+```text
+Voucher Archive Search and Curation for Unified Large-scale Use of Metadata
+```
+
+The current release focuses on retrieval, integration, image download,
+duplicate resolution, and DwC exports. Planned curation extensions include
+specimen-label transcription and automated validation, correction, and
+enrichment of specimen metadata.
 
 Version: `v0.1.1`
 
