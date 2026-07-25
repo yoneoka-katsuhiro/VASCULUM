@@ -3,7 +3,6 @@ from __future__ import annotations
 import csv
 import io
 import json
-import os
 import re
 import zipfile
 from datetime import datetime, timezone
@@ -1864,126 +1863,6 @@ def brahms_bol_records(
                 notes="metadata_from_brahms_bol_html; sparse_record_because_structured_endpoint_not_available",
             )
         )
-    return records
-
-
-def first_present(row: dict[str, object], *keys: str) -> str:
-    for key in keys:
-        value = value_to_str(row.get(key)).strip()
-        if value:
-            return value
-    return ""
-
-
-def tropicos_record_from_item(source: str, query_name: str, item: dict[str, object], record_url_template: str) -> SpecimenRecord:
-    specimen_id = first_present(item, "SpecimenId", "SpecimenID", "specimenId", "id")
-    catalog = first_present(item, "Barcode", "CatalogNumber", "catalogNumber", "AccessionNumber", "HerbariumNumber")
-    institution = first_present(item, "InstitutionCode", "institutionCode", "Herbarium", "Institution")
-    latitude = first_present(item, "DecimalLatitude", "Latitude", "decimalLatitude")
-    longitude = first_present(item, "DecimalLongitude", "Longitude", "decimalLongitude")
-    source_url = record_url_template.format(id=quote_plus(specimen_id)) if specimen_id else ""
-    return SpecimenRecord(
-        source=source,
-        query_name=query_name,
-        source_record_id=specimen_id or catalog,
-        source_record_url=source_url,
-        occurrence_id=first_present(item, "OccurrenceId", "OccurrenceID", "occurrenceID"),
-        institution_code=institution or "MO",
-        catalog_number=catalog,
-        scientific_name=first_present(item, "ScientificName", "scientificName", "TaxonName") or query_name,
-        recorded_by=first_present(item, "Collector", "Collectors", "CollectedBy", "collector"),
-        record_number=first_present(item, "CollectorNumber", "CollectionNumber", "RecordNumber", "Number"),
-        event_date=first_present(item, "CollectionDate", "DateCollected", "EventDate"),
-        country=first_present(item, "Country", "country"),
-        state_province=first_present(item, "State", "StateProvince", "Province", "stateProvince"),
-        locality=first_present(item, "Locality", "locality"),
-        verbatim_locality=first_present(item, "VerbatimLocality", "Locality", "locality"),
-        decimal_latitude=latitude,
-        decimal_longitude=longitude,
-        elevation=first_present(item, "Elevation", "Altitude", "verbatimElevation"),
-        identified_by=first_present(item, "IdentifiedBy", "DeterminedBy"),
-        type_status=first_present(item, "TypeStatus", "typeStatus"),
-        basis_of_record="PRESERVED_SPECIMEN",
-        coordinate_status=coordinate_status(latitude, longitude),
-        accessed_at=now_iso(),
-        download_status="no_image_url",
-        notes="metadata_from_tropicos_api; specimen_image_url_not_exposed_by_adapter",
-    )
-
-
-def tropicos_records(
-    client: PoliteHttpClient,
-    source: str,
-    query_name: str,
-    raw_dir: Path,
-    settings: dict,
-    max_records: int | None,
-    record_offset: int,
-    refresh: bool,
-) -> list[SpecimenRecord]:
-    api_key_env = str(settings.get("credential_env") or settings.get("api_key_env") or "TROPICOS_API_KEY")
-    api_key = os.environ.get(api_key_env, "").strip()
-    if not api_key:
-        return []
-    api_base = str(settings.get("api_url", "https://services.tropicos.org")).rstrip("/")
-    record_url_template = str(settings.get("record_url", "https://www.tropicos.org/specimen/{id}"))
-    delay = float(settings.get("request_delay_seconds", 1.5))
-    page_size = min(int(settings.get("page_size", 50)), 100)
-
-    search_cache = raw_dir / safe_token(query_name) / "name_search.json"
-    if search_cache.exists() and not refresh:
-        data = json.loads(search_cache.read_text(encoding="utf-8"))
-    else:
-        data = client.get_json(
-            f"{api_base}/Name/Search",
-            params={
-                "name": query_name,
-                "type": str(settings.get("name_search_type", "exact")),
-                "pagesize": page_size,
-                "startrow": 1,
-                "apikey": api_key,
-                "format": "json",
-            },
-        )
-        save_raw_json(search_cache, data)
-
-    rows = data if isinstance(data, list) else data.get("Results", []) if isinstance(data, dict) else []
-    name_ids: list[str] = []
-    for row in rows if isinstance(rows, list) else []:
-        if not isinstance(row, dict):
-            continue
-        if bool(settings.get("exact_name_filter", True)) and not query_name_matches(
-            query_name,
-            [row.get("ScientificName"), row.get("Name"), row.get("DisplayName")],
-        ):
-            continue
-        name_id = first_present(row, "NameId", "NameID", "nameId", "id")
-        if name_id:
-            name_ids.append(name_id)
-    records: list[SpecimenRecord] = []
-    seen = 0
-    for name_id in list(dict.fromkeys(name_ids)):
-        cache_path = raw_dir / safe_token(query_name) / "names" / f"name_{safe_token(name_id)}_specimens.json"
-        if cache_path.exists() and not refresh:
-            specimens = json.loads(cache_path.read_text(encoding="utf-8"))
-        else:
-            specimens = client.get_json(
-                f"{api_base}/Name/{quote_plus(name_id)}/Specimens",
-                params={"apikey": api_key, "format": "json"},
-            )
-            save_raw_json(cache_path, specimens)
-        specimen_rows = specimens if isinstance(specimens, list) else specimens.get("Results", []) if isinstance(specimens, dict) else []
-        for item in specimen_rows if isinstance(specimen_rows, list) else []:
-            if not isinstance(item, dict):
-                continue
-            if seen < record_offset:
-                seen += 1
-                continue
-            if max_records is not None and len(records) >= max_records:
-                return records
-            records.append(tropicos_record_from_item(source, query_name, item, record_url_template))
-            seen += 1
-        client.sleep(delay)
     return records
 
 

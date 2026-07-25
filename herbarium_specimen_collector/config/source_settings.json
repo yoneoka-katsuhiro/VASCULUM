@@ -6,9 +6,7 @@
     "cnh",
     "avh",
     "reflora",
-    "k",
     "kag",
-    "p",
     "bm",
     "b",
     "us",
@@ -24,7 +22,6 @@
     "tns",
     "tai",
     "taif",
-    "hast",
     "sing",
     "bo"
   ],
@@ -93,18 +90,6 @@
     "request_delay_seconds": 1.5,
     "image_delay_seconds": 1.5
   },
-  "k": {
-    "handler": "multi",
-    "image_delay_seconds": 1.5,
-    "source_note": "Kew Data Portal is checked explicitly, but scripted access currently reaches a browser access-check.",
-    "components": [
-      {
-        "component_name": "kew_data_portal",
-        "handler": "blocked",
-        "blocked_reason": "Kew Data Portal public search currently requires browser access-check handling."
-      }
-    ]
-  },
   "kag": {
     "handler": "multi",
     "image_delay_seconds": 1.5,
@@ -121,18 +106,6 @@
         "rights_holder": "The Kagoshima University Museum",
         "image_license": "rights_reserved",
         "rights_note": "KAG herbarium page states personal use is permitted; contact Kagoshima University Museum for broad redistribution or commercial use."
-      }
-    ]
-  },
-  "p": {
-    "handler": "multi",
-    "image_delay_seconds": 1.5,
-    "source_note": "MNHN/P has its own search form and is not assumed complete in GBIF, but scripted direct result access is currently protected.",
-    "components": [
-      {
-        "component_name": "mnhn_p_direct",
-        "handler": "blocked",
-        "blocked_reason": "MNHN collection search form is public, but automated result retrieval is currently protected. Use direct seed URLs for manual additions."
       }
     ]
   },
@@ -234,20 +207,8 @@
   "mo": {
     "handler": "multi",
     "image_delay_seconds": 1.5,
-    "source_note": "MO is searched through the official Tropicos Web Services when TROPICOS_API_KEY is configured, then PteridoPortal.",
+    "source_note": "MO is searched through PteridoPortal.",
     "components": [
-      {
-        "component_name": "tropicos_mo",
-        "handler": "tropicos",
-        "api_url": "https://services.tropicos.org",
-        "record_url": "https://www.tropicos.org/specimen/{id}",
-        "credential_env": "TROPICOS_API_KEY",
-        "credential_type": "Tropicos API key",
-        "credential_application_url": "https://services.tropicos.org/help?requestkey",
-        "request_delay_seconds": 1.5,
-        "page_size": 50,
-        "exact_name_filter": true
-      },
       {
         "component_name": "pteridoportal_mo",
         "handler": "symbiota",
@@ -424,18 +385,6 @@
     "verify_tls": false,
     "image_verify_tls": false
   },
-  "hast": {
-    "handler": "multi",
-    "image_delay_seconds": 1.5,
-    "source_note": "HAST has a public Taiwan IPT/DwC-A dataset; this version records the direct archive status, but direct image mapping is not configured.",
-    "components": [
-      {
-        "component_name": "hast_ipt",
-        "handler": "blocked",
-        "blocked_reason": "HAST IPT/DwC-A metadata are public, but direct image mapping is not configured in this version."
-      }
-    ]
-  },
   "sing": {
     "handler": "multi",
     "image_delay_seconds": 1.5,
@@ -520,14 +469,22 @@
     "minimum_image_width": 800,
     "minimum_image_height": 800,
     "minimum_image_bytes": 50000,
-    "max_image_dimension": 2400,
-    "jpeg_quality": 88,
     "timeout_seconds": 60,
     "retry_count": 4,
     "retry_backoff_seconds": 5.0,
     "image_timeout_seconds": 20,
     "image_retry_count": 2,
     "image_retry_backoff_seconds": 2.0,
-    "try_gbif_image_cache": true
+    "try_gbif_image_cache": true,
+    "image_resolution_profiles": {
+      "standard": {
+        "max_image_dimension": 2400,
+        "jpeg_quality": 88
+      },
+      "low": {
+        "max_image_dimension": 1600,
+        "jpeg_quality": 84
+      }
+    }
   }
 }

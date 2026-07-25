@@ -14,7 +14,7 @@ IMAGE_URL_RE = re.compile(
 EXCLUDED_IMAGE_TOKENS = (
     "logo", "icon", "favicon", "sprite", "banner", "button", "avatar",
     "facebook", "twitter", "weibo", "weixin", "loading", "blank",
-    "creativecommons.org", "/images/ipni", "/images/mnhn", "/images/tropicos",
+    "creativecommons.org", "/images/ipni", "/images/mnhn",
     "88x31",
 )
 

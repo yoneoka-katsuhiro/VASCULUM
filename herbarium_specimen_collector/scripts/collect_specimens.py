@@ -56,6 +56,15 @@ def parse_args() -> argparse.Namespace:
         help="Write DwC metadata without downloading images.",
     )
     parser.add_argument(
+        "--image-resolution",
+        choices=("standard", "low"),
+        default="standard",
+        help=(
+            "Downloaded image profile. standard: max 2400 px (default); "
+            "low: max 1600 px with label-readable JPEG quality."
+        ),
+    )
+    parser.add_argument(
         "--dry-run",
         action="store_true",
         help="Validate arguments, dependencies, and configuration without network access.",
@@ -102,6 +111,7 @@ def main() -> int:
             taxon_names=names,
             max_records_per_name=args.limit,
             skip_images=args.skip_images,
+            image_resolution=args.image_resolution,
             dry_run=args.dry_run,
             output_dir=args.output,
             gbif_occurrence_mode=args.gbif_occurrence_mode,
@@ -115,7 +125,10 @@ def main() -> int:
         return 1
 
     if args.dry_run:
-        print("Configuration validated. No files were written.")
+        print(
+            f"Configuration validated for {len(report.sources)} selected source(s). "
+            "No files were written."
+        )
         return 0
 
     print(f"Output: {report.output_dir}")

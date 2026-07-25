@@ -1,12 +1,11 @@
-# herbarium_specimen_collector
+# Herbarium Specimen Collector
 
-This VASCULUM pipeline retrieves and integrates Darwin Core (DwC)-oriented
-herbarium specimen datasets and associated specimen images from multiple
-digital archives. It searches by scientific name, merges duplicate portal
-records that represent the same physical specimen, and downloads linked
-specimen images at a practical research resolution.
+Herbarium Specimen Collector searches public specimen databases by scientific
+name, merges duplicate portal records that represent the same physical
+specimen, and downloads linked specimen images at a practical research
+resolution.
 
-Version: `v0.1.1`
+Version: `v0.1.2`
 
 ## Requirements
 
@@ -48,6 +47,11 @@ bash run_collect_specimens.sh --dry-run \
 
 # Metadata only
 bash run_collect_specimens.sh --skip-images \
+  --taxon "Haplopteris mediosora" \
+  --synonym "Vittaria mediosora"
+
+# Smaller image files
+bash run_collect_specimens.sh --image-resolution low \
   --taxon "Haplopteris mediosora" \
   --synonym "Vittaria mediosora"
 
@@ -97,8 +101,12 @@ spaces or punctuation. If the source catalog number already begins with the
 institution code, it is not repeated. The unmodified source value is retained
 in `otherCatalogNumbers` when it differs.
 
-Images are stored as JPEG, with a default maximum side length of 2400 pixels
-and quality 88. These values are in `config/source_settings.json`.
+Images are stored as JPEG. The default `--image-resolution standard` profile
+uses a maximum side length of 2400 pixels and quality 88. The
+`--image-resolution low` profile uses a maximum side length of 1600 pixels and
+quality 84. The low profile is intended to reduce disk use while retaining
+readable specimen-label text when the source image is sufficiently sharp.
+Profile values are in `config/source_settings.json`.
 The `images/` directory is managed by the program. After a fully successful
 run, JPEG files not referenced by the current DwC rows are removed. Files are
 not pruned after a partial or failed run.
@@ -122,38 +130,28 @@ duplicate gatherings; they never cause specimen deletion.
 Configured source codes:
 
 ```text
-gbif, pteridoportal, cvh, cnh, avh, reflora, k, kag, p, bm, b, us,
-ny, l, mo, ucjeps, mich, f, e, flas, ti, tns, tai, taif, hast, sing, bo
+gbif, pteridoportal, cvh, cnh, avh, reflora, kag, bm, b, us, ny, l,
+mo, ucjeps, mich, f, e, flas, ti, tns, tai, taif, sing, bo
 ```
 
 Direct public adapters are configured for GBIF, PteridoPortal, CVH, CNH, AVH,
-Reflora, KAG, BM, B/JACQ, US/NMNH, L/Naturalis, MO/Tropicos,
+Reflora, KAG, BM, B/JACQ, US/NMNH, L/Naturalis,
 UC/JEPS/CCH2, E/RBGE, TI fern types, TNS WebMuseum, TAI, TAIF, SING/BRAHMS,
-and BO/BRIN DwC-A. NY, MICH, F, FLAS, and part of MO use PteridoPortal records.
-
-K, P, and HAST remain in the source registry but currently report
-`unavailable` because their public sites do not expose a stable automated
-record-and-image route supported by this release. The program does not perform
-a hidden institution-specific GBIF search for them. The standalone `gbif`
-source already searches GBIF once.
-
-Tropicos requires `TROPICOS_API_KEY`; without it, the MO Tropicos component
-reports `credentials_pending` and the other configured MO component can still
-run.
+and BO/BRIN DwC-A. NY, MO, MICH, F, and FLAS use PteridoPortal records.
 
 ## Terminal And Exit Codes
 
 Live progress is written to standard error. Final output paths are written to
-standard output, so normal shell redirection works as expected.
+standard output, so normal shell redirection works as expected. The live table
+shows the number of selected sources, keeps one row per source across accepted
+names and synonyms, and automatically removes columns or shortens text to fit
+the current terminal width.
 
 - `0`: completed without retrieval or image errors
 - `1`: fatal configuration or runtime error
 - `2`: invalid command-line usage
 - `3`: output completed, but one or more source or image operations failed
 - `130`: interrupted by the user
-
-Known `unavailable` sources are reported in `summary.txt` but are not treated as
-unexpected runtime failures.
 
 ## Research And Licensing
 

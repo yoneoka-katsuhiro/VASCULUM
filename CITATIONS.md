@@ -15,7 +15,6 @@ Primary public services used by the configured adapters:
 - [Plants of Taiwan / TAI](https://tai2.ntu.edu.tw/)
 - [TAIF](https://taif.tfri.gov.tw/)
 - [TNS WebMuseum](https://db.kahaku.go.jp/)
-- [Tropicos](https://services.tropicos.org/)
 
 For research outputs, cite each underlying dataset and institution using the
 information in the DwC export and source record page.

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import shutil
 import sys
 import time
 from dataclasses import dataclass
@@ -17,9 +18,14 @@ class ProgressRow:
 
 
 class TerminalProgress:
-    """Render live progress on stderr without creating persistent log files."""
+    """Render one width-safe live row per selected source on stderr."""
 
-    def __init__(self, sources: list[str], stream: TextIO | None = None) -> None:
+    def __init__(
+        self,
+        sources: list[str],
+        stream: TextIO | None = None,
+        terminal_width: int | None = None,
+    ) -> None:
         self.stream = stream or sys.stderr
         self.live = bool(getattr(self.stream, "isatty", lambda: False)())
         self.rows = {source: ProgressRow() for source in sources}
@@ -30,11 +36,12 @@ class TerminalProgress:
         self.duplicate_gatherings = 0
         self.errors: list[str] = []
         self.active_source: str | None = None
+        self._terminal_width = terminal_width
         self._rendered_lines = 0
         self._last_plain_state: dict[str, str] = {}
 
     @staticmethod
-    def _bar(completed: int, total: int, width: int = 24) -> str:
+    def _bar(completed: int, total: int, width: int = 12) -> str:
         if total <= 0:
             return "[" + "." * width + "]"
         filled = min(width, round(width * completed / total))
@@ -46,6 +53,37 @@ class TerminalProgress:
         hours, remainder = divmod(value, 3600)
         minutes, secs = divmod(remainder, 60)
         return f"{hours:02d}:{minutes:02d}:{secs:02d}"
+
+    @staticmethod
+    def _fit(text: str, width: int) -> str:
+        if width <= 0:
+            return ""
+        if len(text) <= width:
+            return text
+        if width == 1:
+            return text[:1]
+        return text[: width - 1] + "~"
+
+    @staticmethod
+    def _status_label(status: str) -> str:
+        return {
+            "pending": "wait",
+            "processing": "search",
+            "images": "images",
+            "complete": "done",
+            "partial": "partial",
+            "failed": "failed",
+            "validated": "ready",
+        }.get(status, status)
+
+    def _width(self) -> int:
+        columns = (
+            self._terminal_width
+            if self._terminal_width is not None
+            else shutil.get_terminal_size(fallback=(80, 24)).columns
+        )
+        # Avoid writing in the last terminal column, which can trigger wrapping.
+        return max(1, columns - 1)
 
     def set_task(self, text: str) -> None:
         self.current_task = text
@@ -101,35 +139,74 @@ class TerminalProgress:
             self.duplicate_gatherings = duplicate_gatherings
         self.render()
 
-    def _lines(self) -> list[str]:
-        lines = [
-            "SOURCE               STATUS       PROGRESS                    RECORDS   IMAGES  RETRY",
-            "",
-        ]
-        for source, row in self.rows.items():
-            progress = self._bar(row.completed, row.total)
+    def _source_counts(self) -> tuple[int, int]:
+        finished = sum(
+            row.status in {"complete", "partial", "failed"}
+            for row in self.rows.values()
+        )
+        active = sum(
+            row.status in {"processing", "images"} for row in self.rows.values()
+        )
+        return finished, active
+
+    def _source_lines(self, width: int) -> list[str]:
+        lines: list[str] = []
+        if width >= 58:
+            lines.append("SOURCE         STATUS   PROGRESS        RECORDS IMAGES")
+            for source, row in self.rows.items():
+                status = self._status_label(row.status)
+                lines.append(
+                    f"{source[:14]:<14} {status[:8]:<8} "
+                    f"{self._bar(row.completed, row.total, 10):<12} "
+                    f"{row.records:>7,} {row.images:>6,}"
+                )
+        elif width >= 40:
+            lines.append("SOURCE         STATUS   DONE    RECORDS")
+            for source, row in self.rows.items():
+                status = self._status_label(row.status)
+                done = f"{row.completed}/{row.total or '?'}"
+                lines.append(
+                    f"{source[:14]:<14} {status[:8]:<8} "
+                    f"{done:>7} {row.records:>7,}"
+                )
+        else:
+            source_width = max(1, width - 18)
             lines.append(
-                f"{source[:20]:<20} {row.status[:12]:<12} {progress:<28} "
-                f"{row.records:>7,} {row.images:>8,} {row.retries:>6,}"
+                f"{'SOURCE'[:source_width]:<{source_width}} STATUS   DONE"
             )
-        source_error_count = len(
-            {
-                error.split(":", 1)[0]
-                for error in self.errors
-                if ":" in error
-            }
+            for source, row in self.rows.items():
+                status = self._status_label(row.status)
+                done = f"{row.completed}/{row.total or '?'}"
+                lines.append(
+                    f"{source[:source_width]:<{source_width}} "
+                    f"{status[:8]:<8} {done:>7}"
+                )
+        return [self._fit(line, width) for line in lines]
+
+    def _lines(self) -> list[str]:
+        width = self._width()
+        finished, active = self._source_counts()
+        source_summary = (
+            f"Sources: {len(self.rows)} selected | {finished} done | {active} active"
         )
-        lines.extend(
-            [
-                "",
-                f"Current task : {self.current_task}",
-                f"Elapsed      : {self._elapsed(time.monotonic() - self.started)}",
-                f"Records found: {self.records_found:,}",
-                f"Physical specimens after deduplication: {self.physical_specimens:,}",
-                f"Duplicate gatherings grouped: {self.duplicate_gatherings:,}",
-                f"Errors       : {source_error_count} source(s), {len(self.errors)} event(s)",
-            ]
+        total_summary = (
+            f"Totals: {self.records_found:,} found | "
+            f"{self.physical_specimens:,} specimens | "
+            f"{self.duplicate_gatherings:,} gatherings | "
+            f"{len(self.errors):,} errors"
         )
+        lines = [
+            self._fit(source_summary, width),
+            "",
+            *self._source_lines(width),
+            "",
+            self._fit(f"Task: {self.current_task}", width),
+            self._fit(
+                f"Elapsed: {self._elapsed(time.monotonic() - self.started)}",
+                width,
+            ),
+            self._fit(total_summary, width),
+        ]
         return lines
 
     def _render_plain(self) -> None:

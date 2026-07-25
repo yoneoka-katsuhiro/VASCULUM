@@ -38,7 +38,6 @@ from .sources import (
     taif_records,
     ti_type_records,
     tns_webmuseum_records,
-    tropicos_records,
 )
 
 
@@ -55,7 +54,6 @@ SOURCE_ALIASES = {
     "ucjeps": "ucjeps",
     "uc": "ucjeps",
     "jeps": "ucjeps",
-    "mnhn": "p",
 }
 
 HANDLERS_WITH_SOURCE: dict[str, Callable[..., list[SpecimenRecord]]] = {
@@ -71,7 +69,6 @@ HANDLERS_WITH_SOURCE: dict[str, Callable[..., list[SpecimenRecord]]] = {
     "rbge": rbge_records,
     "symbiota": symbiota_records,
     "tai2": tai2_records,
-    "tropicos": tropicos_records,
 }
 
 HANDLERS_WITHOUT_SOURCE: dict[str, Callable[..., list[SpecimenRecord]]] = {
@@ -80,7 +77,7 @@ HANDLERS_WITHOUT_SOURCE: dict[str, Callable[..., list[SpecimenRecord]]] = {
     "ti_type": ti_type_records,
     "tns_webmuseum": tns_webmuseum_records,
 }
-CONTROL_HANDLERS = {"blocked", "gbif", "multi"}
+CONTROL_HANDLERS = {"gbif", "multi"}
 
 
 def read_json(path: Path) -> dict:
@@ -129,31 +126,6 @@ def normalize_source_names(names: list[str]) -> list[str]:
             seen.add(normalized)
             result.append(normalized)
     return result
-
-
-def credential_env_names(config: dict) -> list[str]:
-    values = config.get("credential_env") or config.get("credential_envs") or []
-    if isinstance(values, str):
-        values = [values]
-    return [str(item).strip() for item in values if str(item).strip()]
-
-
-def missing_credentials(config: dict) -> list[str]:
-    return [
-        name
-        for name in credential_env_names(config)
-        if not os.environ.get(name, "").strip()
-    ]
-
-
-def credential_pending_message(config: dict, missing: list[str]) -> str:
-    credential_type = str(config.get("credential_type") or "API credential").strip()
-    application_url = str(config.get("credential_application_url") or "").strip()
-    message = (
-        f"credentials_pending: requires {credential_type}; "
-        f"set_env={','.join(missing)}"
-    )
-    return f"{message}; application_url={application_url}" if application_url else message
 
 
 def validate_source_config(source: str, config: dict) -> None:
@@ -214,21 +186,12 @@ def collect_source_records(
     refresh: bool = True,
 ) -> tuple[list[SpecimenRecord], str]:
     handler = str(source_config.get("handler", source)).strip().lower()
-    missing = missing_credentials(source_config)
-    if missing:
-        return [], credential_pending_message(source_config, missing)
-    if handler == "blocked":
-        reason = source_config.get(
-            "blocked_reason",
-            "not available to automated public access",
-        )
-        return [], f"unavailable: {reason}"
     if handler == "multi":
         records: list[SpecimenRecord] = []
         messages: list[str] = []
         components = source_config.get("components") or []
         if not isinstance(components, list) or not components:
-            return [], "unavailable: no components configured"
+            raise ValueError(f"{source}: no components configured")
         for index, component in enumerate(components, start=1):
             if not isinstance(component, dict):
                 continue
@@ -278,18 +241,28 @@ def collect_source_records(
     return records, str(source_config.get("source_note", handler))
 
 
-def source_query_status(message: str, record_count: int) -> str:
-    if record_count:
-        return "complete"
-    lowered = message.lower()
-    if "credentials_pending" in lowered or "unavailable:" in lowered:
-        return "unavailable"
-    return "complete"
-
-
 def collector_version(project_dir: Path) -> str:
     version_file = project_dir / "VERSION.txt"
-    return version_file.read_text(encoding="utf-8").strip() if version_file.exists() else "v0.1.1"
+    return version_file.read_text(encoding="utf-8").strip() if version_file.exists() else "v0.1.2"
+
+
+def image_download_settings(settings: dict, profile_name: str) -> dict:
+    download = settings.get("download", {})
+    if not isinstance(download, dict):
+        raise ValueError("The download configuration must be an object.")
+    profiles = download.get("image_resolution_profiles", {})
+    if not isinstance(profiles, dict) or profile_name not in profiles:
+        raise ValueError(f"Unknown image resolution profile: {profile_name}")
+    profile = profiles[profile_name]
+    if not isinstance(profile, dict):
+        raise ValueError(f"Image resolution profile '{profile_name}' must be an object.")
+    merged = {
+        key: value
+        for key, value in download.items()
+        if key != "image_resolution_profiles"
+    }
+    merged.update(profile)
+    return merged
 
 
 def run_pipeline(
@@ -300,6 +273,7 @@ def run_pipeline(
     taxon_names: list[str] | None,
     max_records_per_name: int | None,
     skip_images: bool,
+    image_resolution: str,
     dry_run: bool,
     output_dir: Path | None = None,
     gbif_occurrence_mode: str | None = None,
@@ -331,6 +305,7 @@ def run_pipeline(
     if gbif_coordinate_filter:
         settings["gbif"]["coordinate_filter"] = gbif_coordinate_filter
 
+    download_settings = image_download_settings(settings, image_resolution)
     destination = (
         output_dir.resolve()
         if output_dir
@@ -341,6 +316,7 @@ def run_pipeline(
         version=collector_version(project_dir),
         accepted_name=accepted_name,
         search_names=names,
+        image_resolution=image_resolution,
         output_dir=destination,
         started_at=started_at,
         sources={source: SourceReport(source=source) for source in enabled_sources},
@@ -355,7 +331,6 @@ def run_pipeline(
     def count_retry() -> None:
         progress.increment_retry()
 
-    download_settings = settings.get("download", {})
     client = PoliteHttpClient(
         contact_email=contact_email,
         timeout_seconds=int(download_settings.get("timeout_seconds", 60)),
@@ -418,10 +393,7 @@ def run_pipeline(
                 if source_had_error:
                     source_report.status = "partial" if source_report.records else "failed"
                 else:
-                    source_report.status = source_query_status(
-                        source_report.message,
-                        source_report.records,
-                    )
+                    source_report.status = "complete"
                 progress.update_source(
                     source,
                     status=source_report.status,

@@ -25,6 +25,7 @@ class RunReport:
     version: str
     accepted_name: str
     search_names: list[str]
+    image_resolution: str
     output_dir: Path
     started_at: datetime
     finished_at: datetime | None = None
@@ -113,6 +114,8 @@ def write_summary(path: Path, report: RunReport) -> None:
         f"Elapsed seconds: {elapsed_seconds}",
         f"Accepted taxon: {report.accepted_name}",
         f"Search names: {' | '.join(report.search_names)}",
+        f"Selected sources: {len(report.sources)}",
+        f"Image resolution: {report.image_resolution}",
         "",
         f"Records found: {report.records_found}",
         f"Physical specimens after deduplication: {len(report.records)}",

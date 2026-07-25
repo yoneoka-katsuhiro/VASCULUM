@@ -1,9 +1,9 @@
 from __future__ import annotations
 
 import sys
-import os
-import io
 import csv
+import io
+import json
 import tempfile
 import zipfile
 from pathlib import Path
@@ -15,7 +15,14 @@ from specimen_collector.html_utils import collect_image_candidates, collect_link
 from specimen_collector.http_client import format_bytes
 from specimen_collector.models import SpecimenRecord
 from specimen_collector.outputs import write_dwc_exports
-from specimen_collector.pipeline import collect_source_records, collection_event_key, deduplicate, gbif_image_cache_urls, normalize_source_names
+from specimen_collector.pipeline import (
+    collection_event_key,
+    deduplicate,
+    gbif_image_cache_urls,
+    image_download_settings,
+    normalize_source_names,
+)
+from specimen_collector.progress import TerminalProgress
 from specimen_collector.records import image_basename, specimen_code
 from specimen_collector.sources import (
     event_date_from_any,
@@ -374,6 +381,39 @@ class FakeDwcaClient:
 
 
 def main() -> None:
+    settings = json.loads((ROOT / "config" / "source_settings.json").read_text())
+    assert len(settings["enabled_sources"]) == 24
+    assert not {"k", "p", "hast"}.intersection(settings["enabled_sources"])
+    assert [part["component_name"] for part in settings["mo"]["components"]] == [
+        "pteridoportal_mo"
+    ]
+    standard = image_download_settings(settings, "standard")
+    low = image_download_settings(settings, "low")
+    assert (standard["max_image_dimension"], standard["jpeg_quality"]) == (2400, 88)
+    assert (low["max_image_dimension"], low["jpeg_quality"]) == (1600, 84)
+
+    for columns in (32, 50, 80):
+        terminal = TerminalProgress(
+            ["gbif", "pteridoportal", "taif"],
+            stream=io.StringIO(),
+            terminal_width=columns,
+        )
+        terminal.update_source(
+            "gbif",
+            status="processing",
+            completed=1,
+            total=2,
+            records=1234,
+            images=9,
+        )
+        terminal.set_task(
+            "gbif - searching a deliberately long synonym that must be truncated"
+        )
+        progress_lines = terminal._lines()
+        assert all(len(line) <= columns - 1 for line in progress_lines)
+        assert progress_lines[0].startswith("Sources: 3 selected")
+        assert sum(line.startswith("gbif") for line in progress_lines) == 1
+
     cvh_html = '''
     <a href="/spms/detail.php?id=abc123">record</a>
     <a href="/spms/detail.php?id=def456">record</a>
@@ -407,10 +447,9 @@ def main() -> None:
     assert format_bytes(1024) == "1.0 KB"
     assert event_date_from_any(-2024956800000, 1905, 11, "") == "1905-11"
 
-    assert normalize_source_names(["GBIF", "UC/JEPS", "MNHN"]) == [
+    assert normalize_source_names(["GBIF", "UC/JEPS"]) == [
         "gbif",
         "ucjeps",
-        "p",
     ]
 
     same_physical = [
@@ -440,7 +479,7 @@ def main() -> None:
     )
     assert specimen_code(rbge_record) == "E01539315"
 
-    with tempfile.TemporaryDirectory() as tmpdir:
+    with tempfile.TemporaryDirectory(dir="/private/tmp") as tmpdir:
         export_dir = Path(tmpdir)
         named_record.local_image_path = (
             "images/TNSVS255550_Haplopteris_mediosora_holotype.jpg"
@@ -492,7 +531,7 @@ def main() -> None:
     assert collection_event_key(event_unique[0])
     assert event_unique[0].collection_event_key == event_unique[1].collection_event_key
 
-    with tempfile.TemporaryDirectory() as tmpdir:
+    with tempfile.TemporaryDirectory(dir="/private/tmp") as tmpdir:
         symbiota = symbiota_records(
             client=FakeSymbiotaClient(),  # type: ignore[arg-type]
             source="pteridoportal",
@@ -510,7 +549,7 @@ def main() -> None:
         )
     assert [record.catalog_number for record in symbiota] == ["MICH2", "NY3"]
 
-    with tempfile.TemporaryDirectory() as tmpdir:
+    with tempfile.TemporaryDirectory(dir="/private/tmp") as tmpdir:
         ny_only = symbiota_records(
             client=FakeSymbiotaClient(),  # type: ignore[arg-type]
             source="ny",
@@ -529,7 +568,7 @@ def main() -> None:
         )
     assert [record.catalog_number for record in ny_only] == ["NY3"]
 
-    with tempfile.TemporaryDirectory() as tmpdir:
+    with tempfile.TemporaryDirectory(dir="/private/tmp") as tmpdir:
         tai_records = tai2_records(
             client=FakeTai2Client(),  # type: ignore[arg-type]
             source="tai",
@@ -552,7 +591,7 @@ def main() -> None:
     assert tai_records[0].elevation == "2700 m"
     assert tai_records[0].image_url.endswith("/TAIimage/image/P25%20Vittariaceae/Vittaria%20taeniophylla/271441.jpg")
 
-    with tempfile.TemporaryDirectory() as tmpdir:
+    with tempfile.TemporaryDirectory(dir="/private/tmp") as tmpdir:
         tns_records = tns_webmuseum_records(
             client=FakeTnsClient(),  # type: ignore[arg-type]
             query_name="Haplopteris mediosora",
@@ -568,7 +607,7 @@ def main() -> None:
     assert tns_records[0].recorded_by == "Shunsuke Serizawa"
     assert "Nagano Pref." in tns_records[0].locality
 
-    with tempfile.TemporaryDirectory() as tmpdir:
+    with tempfile.TemporaryDirectory(dir="/private/tmp") as tmpdir:
         jacq = jacq_records(
             client=FakeJacqClient(),  # type: ignore[arg-type]
             source="b",
@@ -589,7 +628,7 @@ def main() -> None:
     assert jacq[0].catalog_number == "B 20 0160165"
     assert "/1200,/" in jacq[0].image_url
 
-    with tempfile.TemporaryDirectory() as tmpdir:
+    with tempfile.TemporaryDirectory(dir="/private/tmp") as tmpdir:
         ti_records = ti_type_records(
             client=FakeTiClient(),  # type: ignore[arg-type]
             query_name="Vittaria mediosora",
@@ -605,7 +644,7 @@ def main() -> None:
     assert ti_records[0].country == "TAIWAN"
     assert "TI00203898_2048_.jpg" in ti_records[0].image_url
 
-    with tempfile.TemporaryDirectory() as tmpdir:
+    with tempfile.TemporaryDirectory(dir="/private/tmp") as tmpdir:
         nmnh = nmnh_records(
             client=FakeNmnhClient(),  # type: ignore[arg-type]
             source="us",
@@ -621,7 +660,7 @@ def main() -> None:
     assert nmnh[0].record_number == "654"
     assert "ids.si.edu/ids/deliveryService" in nmnh[0].image_url
 
-    with tempfile.TemporaryDirectory() as tmpdir:
+    with tempfile.TemporaryDirectory(dir="/private/tmp") as tmpdir:
         kag = kag_records(
             client=FakeKagClient(),  # type: ignore[arg-type]
             source="kag",
@@ -640,7 +679,7 @@ def main() -> None:
     assert kag[0].elevation == "101 m"
     assert kag[0].image_url.endswith("/picture/KAG022683/KAG022683.jpg")
 
-    with tempfile.TemporaryDirectory() as tmpdir:
+    with tempfile.TemporaryDirectory(dir="/private/tmp") as tmpdir:
         bo_dwca = dwca_records(
             client=FakeDwcaClient(),  # type: ignore[arg-type]
             source="bo",
@@ -666,27 +705,6 @@ def main() -> None:
         image_basename(bo_dwca[0], "Arachniodes puncticulata")
         == "BO1347954_Arachniodes_puncticulata_holotype"
     )
-
-    os.environ.pop("TROPICOS_API_KEY", None)
-    with tempfile.TemporaryDirectory() as tmpdir:
-        found, message = collect_source_records(
-            client=FakeTnsClient(),  # type: ignore[arg-type]
-            source="mo",
-            query_name="Haplopteris mediosora",
-            raw_dir=Path(tmpdir),
-            source_config={
-                "handler": "tropicos",
-                "credential_env": "TROPICOS_API_KEY",
-                "credential_type": "Tropicos API key",
-                "credential_application_url": "https://services.tropicos.org/help?requestkey",
-            },
-            max_records_per_name=None,
-            record_offset=0,
-            refresh=True,
-        )
-    assert found == []
-    assert "credentials_pending" in message
-    assert "TROPICOS_API_KEY" in message
 
     params = gbif_search_params(
         "Haplopteris mediosora",
