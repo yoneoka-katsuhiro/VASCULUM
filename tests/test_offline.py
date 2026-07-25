@@ -440,7 +440,7 @@ def main() -> None:
     )
     assert specimen_code(rbge_record) == "E01539315"
 
-    with tempfile.TemporaryDirectory(dir="/private/tmp") as tmpdir:
+    with tempfile.TemporaryDirectory() as tmpdir:
         export_dir = Path(tmpdir)
         named_record.local_image_path = (
             "images/TNSVS255550_Haplopteris_mediosora_holotype.jpg"
@@ -492,7 +492,7 @@ def main() -> None:
     assert collection_event_key(event_unique[0])
     assert event_unique[0].collection_event_key == event_unique[1].collection_event_key
 
-    with tempfile.TemporaryDirectory(dir="/private/tmp") as tmpdir:
+    with tempfile.TemporaryDirectory() as tmpdir:
         symbiota = symbiota_records(
             client=FakeSymbiotaClient(),  # type: ignore[arg-type]
             source="pteridoportal",
@@ -510,7 +510,7 @@ def main() -> None:
         )
     assert [record.catalog_number for record in symbiota] == ["MICH2", "NY3"]
 
-    with tempfile.TemporaryDirectory(dir="/private/tmp") as tmpdir:
+    with tempfile.TemporaryDirectory() as tmpdir:
         ny_only = symbiota_records(
             client=FakeSymbiotaClient(),  # type: ignore[arg-type]
             source="ny",
@@ -529,7 +529,7 @@ def main() -> None:
         )
     assert [record.catalog_number for record in ny_only] == ["NY3"]
 
-    with tempfile.TemporaryDirectory(dir="/private/tmp") as tmpdir:
+    with tempfile.TemporaryDirectory() as tmpdir:
         tai_records = tai2_records(
             client=FakeTai2Client(),  # type: ignore[arg-type]
             source="tai",
@@ -552,7 +552,7 @@ def main() -> None:
     assert tai_records[0].elevation == "2700 m"
     assert tai_records[0].image_url.endswith("/TAIimage/image/P25%20Vittariaceae/Vittaria%20taeniophylla/271441.jpg")
 
-    with tempfile.TemporaryDirectory(dir="/private/tmp") as tmpdir:
+    with tempfile.TemporaryDirectory() as tmpdir:
         tns_records = tns_webmuseum_records(
             client=FakeTnsClient(),  # type: ignore[arg-type]
             query_name="Haplopteris mediosora",
@@ -568,7 +568,7 @@ def main() -> None:
     assert tns_records[0].recorded_by == "Shunsuke Serizawa"
     assert "Nagano Pref." in tns_records[0].locality
 
-    with tempfile.TemporaryDirectory(dir="/private/tmp") as tmpdir:
+    with tempfile.TemporaryDirectory() as tmpdir:
         jacq = jacq_records(
             client=FakeJacqClient(),  # type: ignore[arg-type]
             source="b",
@@ -589,7 +589,7 @@ def main() -> None:
     assert jacq[0].catalog_number == "B 20 0160165"
     assert "/1200,/" in jacq[0].image_url
 
-    with tempfile.TemporaryDirectory(dir="/private/tmp") as tmpdir:
+    with tempfile.TemporaryDirectory() as tmpdir:
         ti_records = ti_type_records(
             client=FakeTiClient(),  # type: ignore[arg-type]
             query_name="Vittaria mediosora",
@@ -605,7 +605,7 @@ def main() -> None:
     assert ti_records[0].country == "TAIWAN"
     assert "TI00203898_2048_.jpg" in ti_records[0].image_url
 
-    with tempfile.TemporaryDirectory(dir="/private/tmp") as tmpdir:
+    with tempfile.TemporaryDirectory() as tmpdir:
         nmnh = nmnh_records(
             client=FakeNmnhClient(),  # type: ignore[arg-type]
             source="us",
@@ -621,7 +621,7 @@ def main() -> None:
     assert nmnh[0].record_number == "654"
     assert "ids.si.edu/ids/deliveryService" in nmnh[0].image_url
 
-    with tempfile.TemporaryDirectory(dir="/private/tmp") as tmpdir:
+    with tempfile.TemporaryDirectory() as tmpdir:
         kag = kag_records(
             client=FakeKagClient(),  # type: ignore[arg-type]
             source="kag",
@@ -640,7 +640,7 @@ def main() -> None:
     assert kag[0].elevation == "101 m"
     assert kag[0].image_url.endswith("/picture/KAG022683/KAG022683.jpg")
 
-    with tempfile.TemporaryDirectory(dir="/private/tmp") as tmpdir:
+    with tempfile.TemporaryDirectory() as tmpdir:
         bo_dwca = dwca_records(
             client=FakeDwcaClient(),  # type: ignore[arg-type]
             source="bo",
@@ -668,7 +668,7 @@ def main() -> None:
     )
 
     os.environ.pop("TROPICOS_API_KEY", None)
-    with tempfile.TemporaryDirectory(dir="/private/tmp") as tmpdir:
+    with tempfile.TemporaryDirectory() as tmpdir:
         found, message = collect_source_records(
             client=FakeTnsClient(),  # type: ignore[arg-type]
             source="mo",
