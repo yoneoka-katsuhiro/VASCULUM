@@ -26,6 +26,11 @@
     "bo"
   ],
   "continue_on_source_error": true,
+  "network": {
+    "host_request_intervals": {
+      "https://www.pteridoportal.org": 1.0
+    }
+  },
   "gbif": {
     "handler": "gbif",
     "page_size": 100,

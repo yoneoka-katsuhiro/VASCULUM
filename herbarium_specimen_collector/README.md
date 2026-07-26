@@ -5,7 +5,7 @@ name, merges duplicate portal records that represent the same physical
 specimen, and downloads linked specimen images at a practical research
 resolution.
 
-Version: `v0.1.2`
+Version: `v0.1.3`
 
 ## Requirements
 
@@ -105,7 +105,7 @@ bash run_collect_specimens.sh \
   --image-resolution low \
   --output output/Haplopteris_mediosora_trial
 
-# Save terminal progress only when a log is needed
+# Redirect terminal output separately from the diagnostic log
 bash run_collect_specimens.sh \
   --contact-email "your.email@example.com" \
   --taxon "Haplopteris mediosora" \
@@ -117,6 +117,13 @@ bash run_collect_specimens.sh \
 
 Run `bash run_collect_specimens.sh --help` for all options.
 
+Offline verification after setup:
+
+```bash
+.venv/bin/python tests/test_offline.py
+.venv/bin/python tests/test_resume.py
+```
+
 ## Output
 
 Each taxon is written to `output/<taxon_name>/` by default:
@@ -125,15 +132,45 @@ Each taxon is written to `output/<taxon_name>/` by default:
 dwc.csv
 dwc.tsv
 images/
+logs/
 summary.txt
 ```
 
-No raw response cache, working manifest, duplicate report, Appendix table, or
-automatic log file is retained. `dwc.csv` and `dwc.tsv` contain the same Darwin
-Core-oriented rows with different delimiters. `summary.txt` contains counts,
-per-source status, retries, and errors.
+`logs/run_<timestamp>.log` records structured diagnostic events, source and
+query checkpoints, HTTP retries, errors, and output completion. The file
+contains one JSON event per line after its timestamp and severity, making it
+suitable for sharing with Codex when troubleshooting. Contact email values are
+not logged, and credential-like URL parameters are redacted.
+
+`dwc.csv` and `dwc.tsv` contain the same Darwin Core-oriented rows with
+different delimiters. `summary.txt` contains counts, per-source status,
+retries, errors, and the diagnostic log path. No raw response cache, working
+manifest, duplicate report, or Appendix table is retained after completion.
 
 Use `--output PATH` to choose another output directory.
+
+## Resume An Interrupted Run
+
+During collection, progress and temporary response caches are stored under
+`output/<taxon_name>/.resume/`. If the process is interrupted, repeat the same
+command with `--resume`:
+
+```bash
+bash run_collect_specimens.sh --resume \
+  --contact-email "your.email@example.com" \
+  --taxon "Haplopteris mediosora" \
+  --synonym "Vittaria mediosora"
+```
+
+The taxon, synonyms, sources, record limit, image profile, and GBIF filters
+must match the interrupted command. The program resumes at the next unfinished
+name/source checkpoint. If interruption occurred inside a long query, cached
+responses are reused so completed requests are not repeated. Existing
+downloaded images are also validated and reused.
+
+Use `--restart` with the intended command to discard an incompatible or
+unwanted checkpoint. The `.resume/` directory is removed automatically after
+the output files are written successfully. Diagnostic logs are retained.
 
 ## Image Names
 
@@ -187,6 +224,15 @@ Reflora, KAG, BM, B/JACQ, US/NMNH, L/Naturalis,
 UC/JEPS/CCH2, E/RBGE, TI fern types, TNS WebMuseum, TAI, TAIF, SING/BRAHMS,
 and BO/BRIN DwC-A. NY, MO, MICH, F, and FLAS use PteridoPortal records.
 
+PteridoPortal responses are shared across its global and institution-filtered
+searches during one run. Records that do not match an institution filter are
+rejected from API metadata before their HTML pages are requested. Requests to
+the PteridoPortal host are spaced by a transparent per-host interval configured
+under `network.host_request_intervals`. Permanent HTTP errors such as 404 are
+not retried; rate limits and transient server errors still use bounded retries.
+Image requests use the source delay as a per-host interval, avoiding an
+additional fixed wait after every completed image.
+
 ## Terminal And Exit Codes
 
 Live progress is written to standard error. Final output paths are written to
@@ -208,9 +254,9 @@ source institutions. Review `license`, `rightsHolder`, `references`, and
 `associatedMedia` before publication or redistribution. Cite the underlying
 datasets and herbaria, not only this software. See `../CITATIONS.md`.
 
-The program deliberately uses request delays, bounded retries, and a contact
-email. Do not use it to bypass login, CAPTCHA, access controls, or institutional
-terms.
+The program deliberately uses per-host request intervals, bounded retries, and
+a contact email. It does not randomize requests to conceal automation. Do not
+use it to bypass login, CAPTCHA, access controls, or institutional terms.
 
 The source code is released under the MIT License. Downloaded data and images
 are not covered by the software license.

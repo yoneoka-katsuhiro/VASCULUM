@@ -1231,20 +1231,11 @@ def symbiota_record_from_data(
     detail_html: str,
     settings: dict,
 ) -> SpecimenRecord | None:
-    if bool(settings.get("specimens_only", True)):
-        basis = value_to_str(data.get("basisOfRecord"))
-        if basis and "observation" in basis.lower():
-            return None
-    if bool(settings.get("exact_name_filter", True)) and not query_name_matches(
-        query_name,
-        [data.get("sciname"), data.get("scientificName"), data.get("taxoncompleto")],
-    ):
+    if not symbiota_data_allowed(query_name, data, settings):
         return None
     catalog = value_to_str(data.get("catalogNumber"))
     institution = value_to_str(data.get("institutionCode") or data.get("ownerInstitutionCode"))
     collection = value_to_str(data.get("collectionCode"))
-    if not institution_allowed(settings, institution, collection, data.get("ownerInstitutionCode")):
-        return None
     image_url = best_image_url(collect_image_candidates(detail_html, detail_url))
     locality_parts = [
         value_to_str(data.get("country")),
@@ -1286,6 +1277,27 @@ def symbiota_record_from_data(
     )
 
 
+def symbiota_data_allowed(
+    query_name: str,
+    data: dict,
+    settings: dict,
+) -> bool:
+    if bool(settings.get("specimens_only", True)):
+        basis = value_to_str(data.get("basisOfRecord"))
+        if basis and "observation" in basis.lower():
+            return False
+    if bool(settings.get("exact_name_filter", True)) and not query_name_matches(
+        query_name,
+        [data.get("sciname"), data.get("scientificName"), data.get("taxoncompleto")],
+    ):
+        return False
+    institution = value_to_str(data.get("institutionCode") or data.get("ownerInstitutionCode"))
+    collection = value_to_str(data.get("collectionCode"))
+    if not institution_allowed(settings, institution, collection, data.get("ownerInstitutionCode")):
+        return False
+    return True
+
+
 def symbiota_records(
     client: PoliteHttpClient,
     source: str,
@@ -1308,12 +1320,25 @@ def symbiota_records(
     max_pages = int(settings.get("max_pages_per_name", 2))
     delay = float(settings.get("request_delay_seconds", 2.0))
     verify_tls = bool(settings.get("verify_tls", True))
+    shared_cache = str(settings.get("_shared_cache_root", "")).strip()
+    cache_root = Path(shared_cache) if shared_cache else raw_dir
+    use_cache = bool(shared_cache) or not refresh
+    host_interval = getattr(client, "host_interval", None)
+    host_paced = (
+        callable(host_interval)
+        and float(host_interval(base_url)) > 0
+    )
     occurrence_ids: set[str] = set()
 
     for page in range(1, max_pages + 1):
         search_url = search_template.format(query=quote_plus(query_name), page=page)
-        cache_path = raw_dir / safe_token(query_name) / f"search_{page:04d}.html"
-        from_cache = cache_path.exists() and not refresh
+        cache_path = (
+            cache_root
+            / "search"
+            / safe_token(query_name)
+            / f"search_{page:04d}.html"
+        )
+        from_cache = cache_path.exists() and use_cache
         if from_cache:
             html = cache_path.read_text(encoding="utf-8")
         else:
@@ -1323,7 +1348,7 @@ def symbiota_records(
         occurrence_ids.update(symbiota_occurrence_ids(html))
         if len(occurrence_ids) == before and page > 1:
             break
-        if not from_cache:
+        if not from_cache and not host_paced:
             client.sleep(delay)
 
     selected_ids = sorted(occurrence_ids, key=lambda value: int(value))[record_offset:]
@@ -1334,27 +1359,42 @@ def symbiota_records(
             break
         api_url = api_template.format(occid=occurrence_id)
         detail_url = detail_template.format(occid=occurrence_id)
-        api_cache = raw_dir / safe_token(query_name) / "records" / f"{occurrence_id}.json"
-        html_cache = raw_dir / safe_token(query_name) / "records" / f"{occurrence_id}.html"
-        api_from_cache = api_cache.exists() and not refresh
-        html_from_cache = html_cache.exists() and not refresh
+        api_cache = cache_root / "records" / f"{occurrence_id}.json"
+        html_cache = cache_root / "records" / f"{occurrence_id}.html"
+        api_from_cache = api_cache.exists() and use_cache
         if api_from_cache:
             import json
             api_data = json.loads(api_cache.read_text(encoding="utf-8"))
         else:
             api_data = client.get_json(api_url, verify=verify_tls)
             save_raw_json(api_cache, api_data)
+        row = api_data[0] if isinstance(api_data, list) and api_data else {}
+        if not isinstance(row, dict) or not symbiota_data_allowed(
+            query_name,
+            row,
+            settings,
+        ):
+            if not api_from_cache and not host_paced:
+                client.sleep(delay)
+            continue
+        html_from_cache = html_cache.exists() and use_cache
         if html_from_cache:
             detail_html = html_cache.read_text(encoding="utf-8")
         else:
             detail_html = client.get_text(detail_url, verify=verify_tls)
             save_raw_text(html_cache, detail_html)
-        row = api_data[0] if isinstance(api_data, list) and api_data else {}
-        if isinstance(row, dict):
-            record = symbiota_record_from_data(source, query_name, occurrence_id, row, detail_url, detail_html, settings)
-            if record is not None:
-                records.append(record)
-        if not api_from_cache or not html_from_cache:
+        record = symbiota_record_from_data(
+            source,
+            query_name,
+            occurrence_id,
+            row,
+            detail_url,
+            detail_html,
+            settings,
+        )
+        if record is not None:
+            records.append(record)
+        if (not api_from_cache or not html_from_cache) and not host_paced:
             client.sleep(delay)
     return records
 

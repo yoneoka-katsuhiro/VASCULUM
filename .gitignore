@@ -6,4 +6,7 @@ __pycache__/
 *.py[cod]
 .DS_Store
 output/
+.resume/
+logs/
+*.log
 *.zip
