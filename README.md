@@ -41,14 +41,14 @@ bash run_collect_specimens.sh \
   --synonym "Vittaria mediosora"
 ```
 
-For a practical first data run, use the low image-resolution profile:
+For a practical first data run, use the standard image-resolution profile:
 
 ```bash
 bash run_collect_specimens.sh \
   --contact-email "your.email@example.com" \
   --taxon "Haplopteris mediosora" \
   --synonym "Vittaria mediosora" \
-  --image-resolution low
+  --image-resolution standard
 ```
 
 ## Current Scope

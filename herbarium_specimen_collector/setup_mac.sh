@@ -24,4 +24,4 @@ echo
 echo "Setup finished."
 echo "Next commands:"
 echo "  bash run_collect_specimens.sh --contact-email \"your.email@example.com\" --dry-run --taxon \"Haplopteris mediosora\" --synonym \"Vittaria mediosora\""
-echo "  bash run_collect_specimens.sh --contact-email \"your.email@example.com\" --taxon \"Haplopteris mediosora\" --synonym \"Vittaria mediosora\" --image-resolution low"
+echo "  bash run_collect_specimens.sh --contact-email \"your.email@example.com\" --taxon \"Haplopteris mediosora\" --synonym \"Vittaria mediosora\" --image-resolution standard"

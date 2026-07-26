@@ -40,15 +40,16 @@ bash run_collect_specimens.sh \
   --synonym "Vittaria mediosora"
 ```
 
-For the first real data run, the low image-resolution profile is a practical
-starting point:
+For the first real data run, the standard image-resolution profile is the
+recommended starting point, especially when specimen-label text needs to be
+read from the downloaded images:
 
 ```bash
 bash run_collect_specimens.sh \
   --contact-email "your.email@example.com" \
   --taxon "Haplopteris mediosora" \
   --synonym "Vittaria mediosora" \
-  --image-resolution low
+  --image-resolution standard
 ```
 
 By default, results are written under `output/YYYYMMDD_<taxon_name>/`.
@@ -86,7 +87,7 @@ bash run_collect_specimens.sh \
   --synonym "Vittaria mediosora" \
   --output output/Haplopteris_mediosora_metadata
 
-# Smaller image files
+# Smaller image files when label text is not the priority
 bash run_collect_specimens.sh \
   --contact-email "your.email@example.com" \
   --image-resolution low \
@@ -100,7 +101,7 @@ bash run_collect_specimens.sh \
   --limit 10 \
   --taxon "Haplopteris mediosora" \
   --synonym "Vittaria mediosora" \
-  --image-resolution low \
+  --image-resolution standard \
   --output output/Haplopteris_mediosora_trial
 
 # Redirect terminal output separately from the diagnostic log
@@ -108,7 +109,7 @@ bash run_collect_specimens.sh \
   --contact-email "your.email@example.com" \
   --taxon "Haplopteris mediosora" \
   --synonym "Vittaria mediosora" \
-  --image-resolution low \
+  --image-resolution standard \
   > result_paths.txt 2> run.log
 ```
 
@@ -194,8 +195,9 @@ in `otherCatalogNumbers` when it differs.
 Images are stored as JPEG. The default `--image-resolution standard` profile
 uses a maximum side length of 2400 pixels and quality 88. The
 `--image-resolution low` profile uses a maximum side length of 1600 pixels and
-quality 84. The low profile is intended to reduce disk use while retaining
-readable specimen-label text when the source image is sufficiently sharp.
+quality 84. Use `standard` when specimen labels or OCR/transcription quality
+matter. The low profile is intended to reduce disk use when label readability
+is not the priority.
 Profile values are in `config/source_settings.json`.
 The `images/` directory is managed by the program. After a fully successful
 run, JPEG files not referenced by the current DwC rows are removed. Files are
