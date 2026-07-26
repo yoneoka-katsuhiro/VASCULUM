@@ -1,27 +1,17 @@
 from __future__ import annotations
 
-import hashlib
 import json
 import os
 import re
-import shutil
 import sys
+import tempfile
 from datetime import datetime
 from pathlib import Path
 from typing import Callable
 
-from .checkpoint import (
-    checkpoint_path,
-    read_checkpoint,
-    records_from_checkpoint,
-    source_reports_from_checkpoint,
-    write_checkpoint,
-)
-from .diagnostics import RunLogger
 from .http_client import PoliteHttpClient
 from .images import download_images, gbif_image_cache_urls, prune_unreferenced_images
 from .models import SpecimenRecord
-from .output_paths import resolve_output_directory
 from .outputs import RunReport, SourceReport, write_dwc_exports, write_summary
 from .progress import TerminalProgress
 from .records import (
@@ -253,7 +243,7 @@ def collect_source_records(
 
 def collector_version(project_dir: Path) -> str:
     version_file = project_dir / "VERSION.txt"
-    return version_file.read_text(encoding="utf-8").strip() if version_file.exists() else "v0.1.4"
+    return version_file.read_text(encoding="utf-8").strip() if version_file.exists() else "v0.1.5"
 
 
 def image_download_settings(settings: dict, profile_name: str) -> dict:
@@ -275,57 +265,6 @@ def image_download_settings(settings: dict, profile_name: str) -> dict:
     return merged
 
 
-def configure_runtime_caches(config: dict, cache_root: Path) -> None:
-    handler = str(config.get("handler", "")).strip().lower()
-    if handler == "symbiota":
-        base_url = str(config.get("base_url", "symbiota"))
-        config["_shared_cache_root"] = str(
-            cache_root / "symbiota" / safe_token(base_url)
-        )
-    for component in config.get("components", []):
-        if isinstance(component, dict):
-            configure_runtime_caches(component, cache_root)
-
-
-def run_signature(
-    *,
-    version: str,
-    accepted_name: str,
-    names: list[str],
-    sources: list[str],
-    max_records_per_name: int | None,
-    skip_images: bool,
-    image_resolution: str,
-    gbif_settings: dict,
-    settings: dict,
-) -> dict[str, object]:
-    return {
-        "version": version,
-        "accepted_name": accepted_name,
-        "search_names": names,
-        "sources": sources,
-        "max_records_per_name": max_records_per_name,
-        "skip_images": skip_images,
-        "image_resolution": image_resolution,
-        "gbif_occurrence_mode": gbif_settings.get("occurrence_mode", "specimens"),
-        "gbif_coordinate_filter": gbif_settings.get("coordinate_filter", "any"),
-        "configuration_sha256": hashlib.sha256(
-            json.dumps(
-                settings,
-                ensure_ascii=False,
-                sort_keys=True,
-                separators=(",", ":"),
-            ).encode("utf-8")
-        ).hexdigest(),
-    }
-
-
-def append_source_message(source_report: SourceReport, message: str) -> None:
-    source_report.message = "; ".join(
-        value for value in (source_report.message, message) if value
-    )
-
-
 def run_pipeline(
     *,
     project_dir: Path,
@@ -336,14 +275,10 @@ def run_pipeline(
     skip_images: bool,
     image_resolution: str,
     dry_run: bool,
-    resume: bool = False,
-    restart: bool = False,
     output_dir: Path | None = None,
     gbif_occurrence_mode: str | None = None,
     gbif_coordinate_filter: str | None = None,
 ) -> RunReport:
-    if resume and restart:
-        raise ValueError("--resume and --restart cannot be used together.")
     load_env_file(project_dir / ".env")
     settings = read_json(project_dir / "config" / "source_settings.json")
     names = taxon_names or prompt_taxon_names()
@@ -357,7 +292,7 @@ def run_pipeline(
     source_settings = {
         key: value
         for key, value in settings.items()
-        if isinstance(value, dict) and key not in {"download", "network"}
+        if isinstance(value, dict) and key != "download"
     }
     unknown = [source for source in enabled_sources if source not in source_settings]
     if unknown:
@@ -371,150 +306,28 @@ def run_pipeline(
         settings["gbif"]["coordinate_filter"] = gbif_coordinate_filter
 
     download_settings = image_download_settings(settings, image_resolution)
-    version = collector_version(project_dir)
-    signature = run_signature(
-        version=version,
+    destination = (
+        output_dir.resolve()
+        if output_dir
+        else project_dir / "output" / safe_token(accepted_name)
+    )
+    started_at = datetime.now().astimezone()
+    report = RunReport(
+        version=collector_version(project_dir),
         accepted_name=accepted_name,
-        names=names,
-        sources=enabled_sources,
-        max_records_per_name=max_records_per_name,
-        skip_images=skip_images,
+        search_names=names,
         image_resolution=image_resolution,
-        gbif_settings=settings["gbif"],
-        settings=settings,
+        output_dir=destination,
+        started_at=started_at,
+        sources={source: SourceReport(source=source) for source in enabled_sources},
     )
-    destination = resolve_output_directory(
-        project_dir=project_dir,
-        accepted_name=accepted_name,
-        signature=signature,
-        output_dir=output_dir,
-        resume=resume,
-        restart=restart,
-    )
-
     if dry_run:
-        report = RunReport(
-            version=version,
-            accepted_name=accepted_name,
-            search_names=names,
-            image_resolution=image_resolution,
-            output_dir=destination,
-            started_at=datetime.now().astimezone(),
-            sources={
-                source: SourceReport(source=source)
-                for source in enabled_sources
-            },
-        )
         for source_report in report.sources.values():
             source_report.status = "validated"
         report.finished_at = datetime.now().astimezone()
         return report
 
-    state_path = checkpoint_path(destination)
-    resume_dir = state_path.parent
-    if restart and resume_dir.exists():
-        shutil.rmtree(resume_dir)
-    if resume and not state_path.exists():
-        raise ValueError(
-            f"No checkpoint was found at {state_path}. "
-            "Run without --resume to start a new collection."
-        )
-    if state_path.exists() and not resume:
-        raise ValueError(
-            f"An incomplete run was found at {state_path}. "
-            "Use --resume with the same options, or --restart to start again."
-        )
-
-    checkpoint_data = (
-        read_checkpoint(state_path, signature)
-        if resume
-        else None
-    )
-    if checkpoint_data:
-        started_at = datetime.fromisoformat(str(checkpoint_data["started_at"]))
-        report = RunReport(
-            version=version,
-            accepted_name=accepted_name,
-            search_names=names,
-            image_resolution=image_resolution,
-            output_dir=destination,
-            started_at=started_at,
-            records_found=int(checkpoint_data.get("records_found", 0)),
-            records=records_from_checkpoint(checkpoint_data),
-            sources=source_reports_from_checkpoint(
-                checkpoint_data,
-                enabled_sources,
-            ),
-            errors=[
-                str(error)
-                for error in checkpoint_data.get("errors", [])
-            ],
-        )
-        phase = str(checkpoint_data["phase"])
-        next_source_index = int(
-            checkpoint_data.get("next_source_index", 0)
-        )
-        next_name_index = int(checkpoint_data.get("next_name_index", 0))
-    else:
-        started_at = datetime.now().astimezone()
-        report = RunReport(
-            version=version,
-            accepted_name=accepted_name,
-            search_names=names,
-            image_resolution=image_resolution,
-            output_dir=destination,
-            started_at=started_at,
-            sources={
-                source: SourceReport(source=source)
-                for source in enabled_sources
-            },
-        )
-        phase = "collecting"
-        next_source_index = 0
-        next_name_index = 0
-
-    logger = RunLogger(destination, version)
-    report.log_path = logger.path
-    logger.event(
-        "INFO",
-        "run_started",
-        mode="resume" if resume else "new",
-        accepted_name=accepted_name,
-        search_names=names,
-        selected_source_count=len(enabled_sources),
-        sources=enabled_sources,
-        image_resolution=image_resolution,
-        output_dir=destination,
-        checkpoint=state_path,
-        options=signature,
-        resume_phase=phase,
-        resume_source_index=next_source_index,
-        resume_name_index=next_name_index,
-    )
-
     progress = TerminalProgress(enabled_sources)
-
-    for source, source_report in report.sources.items():
-        row = progress.rows[source]
-        row.status = source_report.status
-        row.records = source_report.records
-        row.images = source_report.images
-        row.retries = source_report.retries
-        if source_report.status in {"complete", "partial", "failed"}:
-            row.completed = len(names)
-            row.total = len(names)
-    progress.set_totals(
-        records_found=report.records_found or len(report.records),
-        physical_specimens=(
-            len(report.records) if phase == "images" else 0
-        ),
-        duplicate_gatherings=(
-            duplicate_gathering_count(report.records)
-            if phase == "images"
-            else 0
-        ),
-    )
-
     def count_retry() -> None:
         progress.increment_retry()
 
@@ -524,104 +337,37 @@ def run_pipeline(
         retry_count=int(download_settings.get("retry_count", 4)),
         retry_backoff_seconds=float(download_settings.get("retry_backoff_seconds", 5.0)),
         retry_callback=count_retry,
-        logger=logger,
     )
-
-    network_settings = settings.get("network", {})
-    host_intervals = (
-        network_settings.get("host_request_intervals", {})
-        if isinstance(network_settings, dict)
-        else {}
-    )
-    if isinstance(host_intervals, dict):
-        for host_url, interval in host_intervals.items():
-            client.set_host_interval(str(host_url), float(interval))
-
-    cache_root = resume_dir / "cache"
-    for source in enabled_sources:
-        configure_runtime_caches(settings[source], cache_root)
-
-    def save_state() -> None:
-        for source, row in progress.rows.items():
-            report.sources[source].retries = row.retries
-        write_checkpoint(
-            state_path,
-            signature=signature,
-            started_at=started_at.isoformat(),
-            phase=phase,
-            next_source_index=next_source_index,
-            next_name_index=next_name_index,
-            records_found=report.records_found,
-            records=report.records,
-            sources=report.sources,
-            errors=report.errors,
-        )
+    records: list[SpecimenRecord] = []
 
     try:
-        save_state()
-        if phase == "collecting":
-            records = report.records
-            for source_index in range(
-                next_source_index,
-                len(enabled_sources),
-            ):
-                source = enabled_sources[source_index]
+        with tempfile.TemporaryDirectory(prefix="herbarium_collector_") as temporary:
+            temporary_root = Path(temporary)
+            for source in enabled_sources:
                 source_report = report.sources[source]
-                first_name_index = (
-                    next_name_index
-                    if source_index == next_source_index
-                    else 0
-                )
-                source_had_error = any(
-                    error.startswith(f"{source}:")
-                    for error in report.errors
-                )
+                messages: list[str] = []
+                source_had_error = False
                 progress.update_source(
                     source,
                     status="processing",
-                    completed=first_name_index,
+                    completed=0,
                     total=len(names),
-                    records=source_report.records,
                 )
-                logger.event(
-                    "INFO",
-                    "source_started",
-                    source=source,
-                    resume_name_index=first_name_index,
-                    total_names=len(names),
-                )
-
-                for name_index in range(first_name_index, len(names)):
-                    query_name = names[name_index]
-                    next_source_index = source_index
-                    next_name_index = name_index
+                for position, query_name in enumerate(names, start=1):
                     progress.set_task(f"{source} - searching {query_name}")
-                    query_started = datetime.now().astimezone()
-                    request_count_before = client.request_count
-                    logger.event(
-                        "INFO",
-                        "source_query_started",
-                        source=source,
-                        query_name=query_name,
-                        name_index=name_index,
-                    )
                     try:
                         found, message = collect_source_records(
                             client=client,
                             source=source,
                             query_name=query_name,
-                            raw_dir=cache_root / safe_token(source),
+                            raw_dir=temporary_root / safe_token(source),
                             source_config=settings[source],
                             max_records_per_name=max_records_per_name,
-                            refresh=False,
                         )
                         records.extend(found)
                         source_report.records += len(found)
                         progress.set_totals(records_found=len(records))
-                        append_source_message(
-                            source_report,
-                            f"{query_name}: {message}",
-                        )
+                        messages.append(f"{query_name}: {message}")
                         if ": failed (" in message.lower():
                             source_had_error = True
                             error = (
@@ -630,65 +376,20 @@ def run_pipeline(
                             )
                             report.errors.append(error)
                             progress.add_error(error)
-                            logger.event(
-                                "ERROR",
-                                "source_component_failed",
-                                source=source,
-                                query_name=query_name,
-                                message=message,
-                            )
-                        logger.event(
-                            "INFO",
-                            "source_query_completed",
-                            source=source,
-                            query_name=query_name,
-                            records=len(found),
-                            elapsed_seconds=(
-                                datetime.now().astimezone()
-                                - query_started
-                            ).total_seconds(),
-                            network_requests=(
-                                client.request_count
-                                - request_count_before
-                            ),
-                            message=message,
-                        )
                     except Exception as exc:
                         source_had_error = True
                         error = f"{source}: {query_name}: {exc}"
                         report.errors.append(error)
                         progress.add_error(error)
-                        append_source_message(
-                            source_report,
-                            f"{query_name}: failed ({exc})",
-                        )
-                        logger.exception(
-                            "source_query_failed",
-                            exc,
-                            source=source,
-                            query_name=query_name,
-                            network_requests=(
-                                client.request_count
-                                - request_count_before
-                            ),
-                        )
-
-                    if name_index + 1 < len(names):
-                        next_source_index = source_index
-                        next_name_index = name_index + 1
-                    else:
-                        next_source_index = source_index + 1
-                        next_name_index = 0
-                    report.records = records
-                    report.records_found = len(records)
+                        messages.append(f"{query_name}: failed ({exc})")
                     progress.update_source(
                         source,
-                        completed=name_index + 1,
+                        completed=position,
                         total=len(names),
                         records=source_report.records,
                     )
-                    save_state()
 
+                source_report.message = "; ".join(messages)
                 if source_had_error:
                     source_report.status = "partial" if source_report.records else "failed"
                 else:
@@ -700,50 +401,15 @@ def run_pipeline(
                     total=len(names),
                     records=source_report.records,
                 )
-                logger.event(
-                    "INFO",
-                    "source_completed",
-                    source=source,
-                    status=source_report.status,
-                    records=source_report.records,
-                    retries=progress.rows[source].retries,
-                )
-                save_state()
 
-            report.records_found = len(records)
-            report.records = deduplicate(records)
-            phase = "images"
-            next_source_index = len(enabled_sources)
-            next_name_index = 0
-            save_state()
-
+        report.records_found = len(records)
+        report.records = deduplicate(records)
         progress.set_totals(
             records_found=report.records_found,
             physical_specimens=len(report.records),
             duplicate_gatherings=duplicate_gathering_count(report.records),
         )
-        logger.event(
-            "INFO",
-            "deduplication_completed",
-            records_found=report.records_found,
-            physical_specimens=len(report.records),
-            duplicate_portal_records=(
-                report.records_found - len(report.records)
-            ),
-            duplicate_gatherings=duplicate_gathering_count(report.records),
-        )
-
-        def image_checkpoint(processed: int, total: int) -> None:
-            if processed % 25 == 0 or processed == total:
-                save_state()
-                logger.event(
-                    "INFO",
-                    "image_checkpoint",
-                    processed=processed,
-                    total=total,
-                )
-
-        image_result = download_images(
+        download_images(
             client=client,
             output_dir=destination,
             records=report.records,
@@ -753,17 +419,6 @@ def run_pipeline(
             skip_images=skip_images,
             progress=progress,
             source_reports=report.sources,
-            checkpoint_callback=image_checkpoint,
-            logger=logger,
-        )
-        save_state()
-        logger.event(
-            "INFO",
-            "image_phase_completed",
-            downloaded=image_result.downloaded,
-            existing=image_result.existing,
-            failed=image_result.failed,
-            skipped=image_result.skipped,
         )
         for error in progress.errors:
             if error not in report.errors:
@@ -776,57 +431,7 @@ def run_pipeline(
         report.finished_at = datetime.now().astimezone()
         write_dwc_exports(destination, report.records, accepted_name)
         write_summary(destination / "summary.txt", report)
-        logger.event(
-            "INFO",
-            "outputs_written",
-            dwc_csv=destination / "dwc.csv",
-            dwc_tsv=destination / "dwc.tsv",
-            summary=destination / "summary.txt",
-            image_directory=destination / "images",
-        )
         progress.set_task(f"complete - {destination}")
-        logger.event(
-            "INFO",
-            "run_completed",
-            errors=len(report.errors),
-            records=report.records_found,
-            physical_specimens=len(report.records),
-            network_requests=client.request_count,
-            retry_events=client.retry_events,
-        )
-        shutil.rmtree(resume_dir)
-    except BaseException as exc:
-        try:
-            save_state()
-            logger.event(
-                "INFO",
-                "checkpoint_saved_after_stop",
-                phase=phase,
-                next_source_index=next_source_index,
-                next_name_index=next_name_index,
-                records=len(report.records),
-            )
-        except Exception as checkpoint_exc:
-            logger.exception(
-                "checkpoint_save_failed",
-                checkpoint_exc,
-            )
-        logger.exception(
-            "run_stopped",
-            exc,
-            phase=phase,
-            next_source_index=next_source_index,
-            next_name_index=next_name_index,
-            network_requests=client.request_count,
-            retry_events=client.retry_events,
-        )
-        print(f"Diagnostic log: {logger.path}", file=sys.stderr)
-        print(
-            f"Resume checkpoint: {state_path}",
-            file=sys.stderr,
-        )
-        raise
     finally:
         progress.finish()
-        logger.close()
     return report

@@ -4,9 +4,10 @@
 .venv/
 __pycache__/
 *.py[cod]
+.pytest_cache/
+.mypy_cache/
+.coverage
+coverage.xml
 .DS_Store
 output/
-.resume/
-logs/
-*.log
 *.zip

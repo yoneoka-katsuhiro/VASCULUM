@@ -5,12 +5,10 @@ from collections import Counter
 from dataclasses import dataclass
 from io import BytesIO
 from pathlib import Path
-from typing import Callable
 from urllib.parse import parse_qs, urlparse
 
 from PIL import Image
 
-from .diagnostics import RunLogger
 from .http_client import DownloadedImage, PoliteHttpClient, download_and_validate_image
 from .models import SpecimenRecord
 from .outputs import SourceReport
@@ -221,15 +219,11 @@ def download_images(
     skip_images: bool,
     progress: TerminalProgress,
     source_reports: dict[str, SourceReport],
-    checkpoint_callback: Callable[[int, int], None] | None = None,
-    logger: RunLogger | None = None,
 ) -> ImageResult:
     result = ImageResult()
-    image_records = [record for record in records if record.image_url]
-    destinations = _destinations(output_dir, image_records, accepted_name)
     candidates = [
         record
-        for record in image_records
+        for record in records
         if record.image_url and record.download_status in {"", "pending"}
     ]
     if skip_images:
@@ -247,27 +241,15 @@ def download_images(
     timeout = float(download_settings.get("image_timeout_seconds", 20))
     retries = int(download_settings.get("image_retry_count", 2))
     backoff = float(download_settings.get("image_retry_backoff_seconds", 2.0))
+    destinations = _destinations(output_dir, candidates, accepted_name)
     totals = Counter(record.source for record in candidates)
     completed: Counter[str] = Counter()
-    successful: Counter[str] = Counter(
-        record.source
-        for record in image_records
-        if record.local_image_path
-        and record.download_status in {"downloaded", "already_downloaded"}
-    )
+    successful: Counter[str] = Counter()
 
-    for processed_count, record in enumerate(candidates, start=1):
+    for record in candidates:
         source = record.source
         destination = destinations[id(record)]
         label = destination.stem
-        delay = float(
-            source_settings.get(source, {}).get(
-                "image_delay_seconds",
-                2.0,
-            )
-        )
-        network_requested = False
-        host_paced = False
         progress.set_task(f"{source} - downloading {label}")
         progress.update_source(
             source,
@@ -298,18 +280,6 @@ def download_images(
             failures: list[str] = []
             for candidate_url in download_urls(record, download_settings):
                 try:
-                    network_requested = True
-                    set_host_interval = getattr(
-                        client,
-                        "set_host_interval",
-                        None,
-                    )
-                    if (
-                        candidate_url.startswith(("http://", "https://"))
-                        and callable(set_host_interval)
-                    ):
-                        set_host_interval(candidate_url, delay)
-                        host_paced = True
                     if candidate_url.startswith("taif_tiles://"):
                         downloaded = download_taif_tiled_image(
                             client=client,
@@ -363,15 +333,6 @@ def download_images(
                 source_reports[source].status = "partial"
                 message = f"{source}: {label}: {failures[-1] if failures else 'image unavailable'}"
                 progress.add_error(message)
-                if logger is not None:
-                    logger.event(
-                        "ERROR",
-                        "image_failed",
-                        source=source,
-                        specimen=label,
-                        attempts=len(failures),
-                        reasons=failures,
-                    )
 
         completed[source] += 1
         source_reports[source].images = successful[source]
@@ -382,14 +343,8 @@ def download_images(
             total=totals[source],
             images=successful[source],
         )
-        if checkpoint_callback is not None:
-            checkpoint_callback(processed_count, len(candidates))
-        if (
-            delay > 0
-            and network_requested
-            and not host_paced
-            and completed[source] < totals[source]
-        ):
+        delay = float(source_settings.get(source, {}).get("image_delay_seconds", 2.0))
+        if delay > 0 and completed[source] < totals[source]:
             client.sleep(delay)
 
     return result

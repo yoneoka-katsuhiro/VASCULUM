@@ -16,5 +16,16 @@ Primary public services used by the configured adapters:
 - [TAIF](https://taif.tfri.gov.tw/)
 - [TNS WebMuseum](https://db.kahaku.go.jp/)
 
+Georeferencing and environmental context services:
+
+- [OpenStreetMap contributors](https://www.openstreetmap.org/copyright)
+- [Overpass API](https://wiki.openstreetmap.org/wiki/Overpass_API)
+- [Open-Meteo Elevation API](https://open-meteo.com/en/docs/elevation-api)
+- [Copernicus DEM](https://doi.org/10.5270/ESA-c5d3d65)
+- [ESA WorldCover](https://esa-worldcover.org/)
+
+LLM-assisted runs should also record and cite the selected provider, model,
+and access date. These values are retained in the curator outputs and logs.
+
 For research outputs, cite each underlying dataset and institution using the
 information in the DwC export and source record page.

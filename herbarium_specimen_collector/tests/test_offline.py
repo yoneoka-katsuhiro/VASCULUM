@@ -12,7 +12,7 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "scripts"))
 
 from specimen_collector.html_utils import collect_image_candidates, collect_links
-from specimen_collector.http_client import PoliteHttpClient, format_bytes
+from specimen_collector.http_client import format_bytes
 from specimen_collector.models import SpecimenRecord
 from specimen_collector.outputs import write_dwc_exports
 from specimen_collector.pipeline import (
@@ -39,12 +39,7 @@ from specimen_collector.sources import (
 
 
 class FakeSymbiotaClient:
-    def __init__(self) -> None:
-        self.json_requests = 0
-        self.text_requests = 0
-
     def get_text(self, url: str, *, verify: bool | None = None) -> str:
-        self.text_requests += 1
         if "collections/list.php" in url:
             return """
             <input name="occid[]" value="1">
@@ -54,7 +49,6 @@ class FakeSymbiotaClient:
         return "<html><title>record</title></html>"
 
     def get_json(self, url: str, *, verify: bool | None = None) -> list[dict[str, object]]:
-        self.json_requests += 1
         occid = url.rsplit("/", 1)[-1]
         if occid == "1":
             return [{"basisOfRecord": "HumanObservation", "sciname": "Haplopteris mediosora"}]
@@ -458,58 +452,6 @@ def main() -> None:
         "ucjeps",
     ]
 
-    permanent_failure_client = PoliteHttpClient(
-        contact_email="test@example.org",
-        timeout_seconds=1,
-        retry_count=4,
-        retry_backoff_seconds=0,
-    )
-    permanent_attempts = 0
-
-    def permanent_failure_request(*args: object, **kwargs: object) -> object:
-        nonlocal permanent_attempts
-        from requests import Response
-
-        permanent_attempts += 1
-        response = Response()
-        response.status_code = 404
-        response.url = "https://example.org/missing"
-        return response
-
-    permanent_failure_client.session.request = permanent_failure_request  # type: ignore[method-assign]
-    try:
-        permanent_failure_client.get_text("https://example.org/missing")
-    except RuntimeError as exc:
-        assert "HTTP 404" in str(exc)
-    else:
-        raise AssertionError("A permanent HTTP failure was accepted.")
-    assert permanent_attempts == 1
-
-    transient_client = PoliteHttpClient(
-        contact_email="test@example.org",
-        timeout_seconds=1,
-        retry_count=2,
-        retry_backoff_seconds=0,
-    )
-    transient_statuses = [503, 200]
-
-    def transient_request(*args: object, **kwargs: object) -> object:
-        from requests import Response
-
-        response = Response()
-        response.status_code = transient_statuses.pop(0)
-        response.url = "https://example.org/recovered"
-        response._content = b"recovered"
-        return response
-
-    transient_client.session.request = transient_request  # type: ignore[method-assign]
-    assert (
-        transient_client.get_text("https://example.org/transient")
-        == "recovered"
-    )
-    assert transient_client.request_count == 2
-    assert transient_client.retry_events == 1
-
     same_physical = [
         SpecimenRecord(source="gbif", institution_code="MNHN", catalog_number="P01187634", image_url="https://x/1.jpg"),
         SpecimenRecord(source="p", institution_code="P", catalog_number="P01187634", source_record_url="https://y/record"),
@@ -590,48 +532,22 @@ def main() -> None:
     assert event_unique[0].collection_event_key == event_unique[1].collection_event_key
 
     with tempfile.TemporaryDirectory() as tmpdir:
-        shared_client = FakeSymbiotaClient()
-        shared_cache = Path(tmpdir) / "shared"
-        shared_settings = {
-            "base_url": "https://example.org/portal",
-            "specimens_only": True,
-            "exact_name_filter": True,
-            "request_delay_seconds": 0,
-            "_shared_cache_root": str(shared_cache),
-        }
         symbiota = symbiota_records(
-            client=shared_client,  # type: ignore[arg-type]
+            client=FakeSymbiotaClient(),  # type: ignore[arg-type]
             source="pteridoportal",
             query_name="Haplopteris mediosora",
             raw_dir=Path(tmpdir),
-            settings=shared_settings,
+            settings={
+                "base_url": "https://example.org/portal",
+                "specimens_only": True,
+                "exact_name_filter": True,
+                "request_delay_seconds": 0,
+            },
             max_records=2,
             record_offset=0,
             refresh=True,
         )
-        assert [record.catalog_number for record in symbiota] == ["MICH2", "NY3"]
-        assert shared_client.json_requests == 3
-        assert shared_client.text_requests == 4
-        shared_settings["institution_codes"] = ["NY"]
-        before_requests = (
-            shared_client.json_requests,
-            shared_client.text_requests,
-        )
-        ny_from_shared_cache = symbiota_records(
-            client=shared_client,  # type: ignore[arg-type]
-            source="ny",
-            query_name="Haplopteris mediosora",
-            raw_dir=Path(tmpdir),
-            settings=shared_settings,
-            max_records=2,
-            record_offset=0,
-            refresh=True,
-        )
-        assert [record.catalog_number for record in ny_from_shared_cache] == ["NY3"]
-        assert (
-            shared_client.json_requests,
-            shared_client.text_requests,
-        ) == before_requests
+    assert [record.catalog_number for record in symbiota] == ["MICH2", "NY3"]
 
     with tempfile.TemporaryDirectory() as tmpdir:
         ny_only = symbiota_records(

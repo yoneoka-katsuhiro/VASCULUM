@@ -40,7 +40,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--output",
         type=Path,
-        help="Output directory. Default: output/YYYYMMDD_<taxon_name>.",
+        help="Output directory. Default: output/<taxon_name>.",
     )
     parser.add_argument(
         "--limit",
@@ -68,17 +68,6 @@ def parse_args() -> argparse.Namespace:
         "--dry-run",
         action="store_true",
         help="Validate arguments, dependencies, and configuration without network access.",
-    )
-    continuation = parser.add_mutually_exclusive_group()
-    continuation.add_argument(
-        "--resume",
-        action="store_true",
-        help="Continue an interrupted run using its saved checkpoint.",
-    )
-    continuation.add_argument(
-        "--restart",
-        action="store_true",
-        help="Discard an interrupted run checkpoint and start again.",
     )
     parser.add_argument(
         "--gbif-occurrence-mode",
@@ -112,12 +101,6 @@ def main() -> int:
     if args.limit is not None and args.limit <= 0:
         print("ERROR: --limit must be greater than 0.", file=sys.stderr)
         return 2
-    if args.dry_run and (args.resume or args.restart):
-        print(
-            "ERROR: --resume and --restart cannot be combined with --dry-run.",
-            file=sys.stderr,
-        )
-        return 2
 
     names = [args.taxon, *args.synonym] if args.taxon else None
     try:
@@ -130,8 +113,6 @@ def main() -> int:
             skip_images=args.skip_images,
             image_resolution=args.image_resolution,
             dry_run=args.dry_run,
-            resume=args.resume,
-            restart=args.restart,
             output_dir=args.output,
             gbif_occurrence_mode=args.gbif_occurrence_mode,
             gbif_coordinate_filter=args.gbif_coordinate_filter,
@@ -148,7 +129,6 @@ def main() -> int:
             f"Configuration validated for {len(report.sources)} selected source(s). "
             "No files were written."
         )
-        print(f"Prospective output: {report.output_dir}")
         return 0
 
     print(f"Output: {report.output_dir}")
@@ -156,7 +136,6 @@ def main() -> int:
     print(f"DwC TSV: {report.output_dir / 'dwc.tsv'}")
     print(f"Images: {report.output_dir / 'images'}")
     print(f"Summary: {report.output_dir / 'summary.txt'}")
-    print(f"Log: {report.log_path}")
     if report.partial_failure:
         print(
             f"Completed with {len(report.errors)} error(s); see summary.txt.",

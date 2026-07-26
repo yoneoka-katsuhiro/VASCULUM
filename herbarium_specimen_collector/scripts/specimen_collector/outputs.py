@@ -28,7 +28,6 @@ class RunReport:
     image_resolution: str
     output_dir: Path
     started_at: datetime
-    log_path: Path | None = None
     finished_at: datetime | None = None
     records_found: int = 0
     records: list[SpecimenRecord] = field(default_factory=list)
@@ -108,7 +107,7 @@ def write_summary(path: Path, report: RunReport) -> None:
     merged_count = max(0, report.records_found - len(report.records))
 
     lines = [
-        f"Herbarium Specimen Collector {report.version}",
+        f"VASCULUM {report.version}",
         "",
         f"Run started: {report.started_at.isoformat(timespec='seconds')}",
         f"Run finished: {finished_at.isoformat(timespec='seconds')}",
@@ -117,11 +116,6 @@ def write_summary(path: Path, report: RunReport) -> None:
         f"Search names: {' | '.join(report.search_names)}",
         f"Selected sources: {len(report.sources)}",
         f"Image resolution: {report.image_resolution}",
-        (
-            f"Log file: {report.log_path.relative_to(report.output_dir)}"
-            if report.log_path
-            else "Log file: none"
-        ),
         "",
         f"Records found: {report.records_found}",
         f"Physical specimens after deduplication: {len(report.records)}",

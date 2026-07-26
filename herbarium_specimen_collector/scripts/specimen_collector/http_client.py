@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import hashlib
+import random
 import re
 import time
 from dataclasses import dataclass
@@ -13,8 +14,6 @@ from PIL import Image
 from requests import Response
 from urllib3.exceptions import InsecureRequestWarning
 
-from .diagnostics import RunLogger
-
 StatusCallback = Callable[[str], None]
 SECRET_QUERY_KEYS = {
     "api_key",
@@ -25,7 +24,6 @@ SECRET_QUERY_KEYS = {
     "password",
     "client_secret",
 }
-RETRYABLE_STATUS_CODES = {408, 425, 429, 500, 502, 503, 504}
 
 
 @dataclass(frozen=True)
@@ -78,52 +76,21 @@ class PoliteHttpClient:
         retry_count: int,
         retry_backoff_seconds: float,
         retry_callback: Callable[[], None] | None = None,
-        logger: RunLogger | None = None,
     ) -> None:
         self.timeout_seconds = timeout_seconds
         self.retry_count = retry_count
         self.retry_backoff_seconds = retry_backoff_seconds
         self.retry_callback = retry_callback
-        self.logger = logger
-        self.request_count = 0
-        self.retry_events = 0
-        self._host_intervals: dict[str, float] = {}
-        self._host_last_request: dict[str, float] = {}
         self.session = requests.Session()
         self.session.headers.update(
             {
                 "User-Agent": (
-                    "VASCULUM/0.1.4 "
+                    "VASCULUM/0.1.2 "
                     f"(academic research; contact: {contact_email})"
                 ),
                 "Accept-Language": "en,ja;q=0.9,zh;q=0.8",
             }
         )
-
-    def set_host_interval(self, url: str, seconds: float) -> None:
-        host = urlsplit(url).netloc.lower()
-        if host:
-            self._host_intervals[host] = max(0.0, float(seconds))
-
-    def host_interval(self, url: str) -> float:
-        return self._host_intervals.get(urlsplit(url).netloc.lower(), 0.0)
-
-    def _wait_for_host(self, url: str) -> None:
-        host = urlsplit(url).netloc.lower()
-        interval = self._host_intervals.get(host, 0.0)
-        previous = self._host_last_request.get(host)
-        if interval > 0 and previous is not None:
-            remaining = interval - (time.monotonic() - previous)
-            if remaining > 0:
-                self.sleep(remaining)
-        self._host_last_request[host] = time.monotonic()
-
-    @staticmethod
-    def _close_response(response: Response) -> None:
-        try:
-            response.close()
-        except (AttributeError, OSError):
-            pass
 
     def _request(
         self,
@@ -133,7 +100,7 @@ class PoliteHttpClient:
         status_callback: StatusCallback | None = None,
         **kwargs: object,
     ) -> Response:
-        last_error: object = "unknown error"
+        last_error: Exception | None = None
         timeout_seconds = float(kwargs.pop("timeout_seconds", self.timeout_seconds))
         retry_count = int(kwargs.pop("retry_count", self.retry_count))
         retry_backoff_seconds = float(kwargs.pop("retry_backoff_seconds", self.retry_backoff_seconds))
@@ -143,8 +110,6 @@ class PoliteHttpClient:
             try:
                 if kwargs.get("verify") is False:
                     requests.packages.urllib3.disable_warnings(category=InsecureRequestWarning)
-                self._wait_for_host(url)
-                self.request_count += 1
                 response = self.session.request(
                     method,
                     url,
@@ -152,70 +117,31 @@ class PoliteHttpClient:
                     allow_redirects=True,
                     **kwargs,
                 )
+                if response.status_code == 429:
+                    if self.retry_callback is not None:
+                        self.retry_callback()
+                    retry_after = response.headers.get("Retry-After")
+                    delay = (
+                        float(retry_after)
+                        if retry_after and retry_after.replace(".", "", 1).isdigit()
+                        else retry_backoff_seconds * attempt
+                    )
+                    if status_callback is not None:
+                        status_callback(f"RATE LIMITED; RETRY IN {delay:.1f}s")
+                    self.sleep(delay, status_callback=status_callback, prefix="RATE-LIMIT WAIT")
+                    continue
+                response.raise_for_status()
+                return response
             except requests.RequestException as exc:
                 last_error = exc
                 if attempt == retry_count:
                     break
+                if self.retry_callback is not None:
+                    self.retry_callback()
                 delay = retry_backoff_seconds * attempt
-                reason = redact_secret_text(exc)
-            else:
-                if response.status_code < 400:
-                    return response
-                last_error = f"HTTP {response.status_code}"
-                if response.status_code not in RETRYABLE_STATUS_CODES:
-                    message = (
-                        f"HTTP {response.status_code} for "
-                        f"{method} {redact_url(url)}"
-                    )
-                    if self.logger is not None:
-                        self.logger.event(
-                            "ERROR",
-                            "http_permanent_failure",
-                            method=method,
-                            url=redact_url(url),
-                            status=response.status_code,
-                            attempt=attempt,
-                        )
-                    self._close_response(response)
-                    raise RuntimeError(message)
-                if attempt == retry_count:
-                    self._close_response(response)
-                    break
-                retry_after = response.headers.get("Retry-After")
-                delay = (
-                    float(retry_after)
-                    if retry_after and retry_after.replace(".", "", 1).isdigit()
-                    else retry_backoff_seconds * attempt
-                )
-                reason = f"HTTP {response.status_code}"
-                self._close_response(response)
-
-            if self.retry_callback is not None:
-                self.retry_callback()
-            self.retry_events += 1
-            if self.logger is not None:
-                self.logger.event(
-                    "WARNING",
-                    "http_retry",
-                    method=method,
-                    url=redact_url(url),
-                    attempt=attempt,
-                    max_attempts=retry_count,
-                    wait_seconds=delay,
-                    reason=reason,
-                )
-            if status_callback is not None:
-                status_callback(f"RETRY {attempt + 1}/{retry_count} IN {delay:.1f}s")
-            self.sleep(delay, status_callback=status_callback, prefix="RETRY WAIT")
-        if self.logger is not None:
-            self.logger.event(
-                "ERROR",
-                "http_retries_exhausted",
-                method=method,
-                url=redact_url(url),
-                attempts=retry_count,
-                reason=redact_secret_text(last_error),
-            )
+                if status_callback is not None:
+                    status_callback(f"RETRY {attempt + 1}/{retry_count} IN {delay:.1f}s")
+                self.sleep(delay, status_callback=status_callback, prefix="RETRY WAIT")
         raise RuntimeError(
             f"HTTP request failed after retries: {redact_url(url)}: {redact_secret_text(last_error)}"
         )
@@ -418,7 +344,8 @@ class PoliteHttpClient:
     ) -> None:
         if seconds <= 0:
             return
-        deadline = time.monotonic() + seconds
+        total = seconds + random.uniform(0, min(0.5, seconds * 0.1))
+        deadline = time.monotonic() + total
         while True:
             remaining = deadline - time.monotonic()
             if remaining <= 0:
