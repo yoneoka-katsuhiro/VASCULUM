@@ -48,11 +48,10 @@ bash run_collect_specimens.sh \
   --contact-email "your.email@example.com" \
   --taxon "Haplopteris mediosora" \
   --synonym "Vittaria mediosora" \
-  --image-resolution low \
-  --output output/Haplopteris_mediosora_low
+  --image-resolution low
 ```
 
-This keeps the run separate from any previous default output directory.
+By default, results are written under `output/<taxon_name>/`.
 
 ## Run
 
@@ -92,8 +91,7 @@ bash run_collect_specimens.sh \
   --contact-email "your.email@example.com" \
   --image-resolution low \
   --taxon "Haplopteris mediosora" \
-  --synonym "Vittaria mediosora" \
-  --output output/Haplopteris_mediosora_low
+  --synonym "Vittaria mediosora"
 
 # Selected sources and a small trial limit
 bash run_collect_specimens.sh \
@@ -111,7 +109,6 @@ bash run_collect_specimens.sh \
   --taxon "Haplopteris mediosora" \
   --synonym "Vittaria mediosora" \
   --image-resolution low \
-  --output output/Haplopteris_mediosora_low \
   > result_paths.txt 2> run.log
 ```
 
