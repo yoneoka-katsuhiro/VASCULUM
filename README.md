@@ -56,7 +56,7 @@ bash run_collect_specimens.sh \
 The current pipeline searches by scientific name, merges duplicate portal
 records that represent the same physical specimen, downloads linked specimen
 images, writes DwC-oriented exports, records diagnostic logs, and can resume
-interrupted runs.
+interrupted runs. By default, each run is written to a dated output directory.
 
 Planned curation extensions include specimen-label transcription and automated
 validation, correction, and enrichment of specimen metadata.

@@ -40,7 +40,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--output",
         type=Path,
-        help="Output directory. Default: output/<taxon_name>.",
+        help="Output directory. Default: output/YYYYMMDD_<taxon_name>.",
     )
     parser.add_argument(
         "--limit",
@@ -148,6 +148,7 @@ def main() -> int:
             f"Configuration validated for {len(report.sources)} selected source(s). "
             "No files were written."
         )
+        print(f"Prospective output: {report.output_dir}")
         return 0
 
     print(f"Output: {report.output_dir}")

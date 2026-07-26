@@ -20,4 +20,7 @@ jobs:
       - name: Compile Python files
         run: python -m compileall -q scripts tests
       - name: Run offline tests
-        run: python tests/test_offline.py
+        run: |
+          python tests/test_offline.py
+          python tests/test_resume.py
+          python tests/test_output_paths.py

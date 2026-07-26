@@ -13,15 +13,11 @@ from urllib.parse import quote, quote_plus, urlencode, urljoin, urlparse
 from .html_utils import collect_image_candidates, collect_links, save_raw_json, save_raw_text, soup_from_html, text_value
 from .http_client import PoliteHttpClient
 from .models import SpecimenRecord
+from .text_utils import safe_token
 
 
 def now_iso() -> str:
     return datetime.now(timezone.utc).isoformat(timespec="seconds")
-
-
-def safe_token(value: object, fallback: str = "unknown") -> str:
-    text = re.sub(r"[^A-Za-z0-9._-]+", "_", str(value or "").strip()).strip("_")
-    return text[:140] or fallback
 
 
 def value_to_str(value: object) -> str:

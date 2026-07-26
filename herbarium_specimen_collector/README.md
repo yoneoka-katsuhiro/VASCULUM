@@ -5,7 +5,7 @@ name, merges duplicate portal records that represent the same physical
 specimen, and downloads linked specimen images at a practical research
 resolution.
 
-Version: `v0.1.3`
+Version: `v0.1.4`
 
 ## Requirements
 
@@ -51,7 +51,7 @@ bash run_collect_specimens.sh \
   --image-resolution low
 ```
 
-By default, results are written under `output/<taxon_name>/`.
+By default, results are written under `output/YYYYMMDD_<taxon_name>/`.
 
 ## Run
 
@@ -119,19 +119,25 @@ Offline verification after setup:
 ```bash
 .venv/bin/python tests/test_offline.py
 .venv/bin/python tests/test_resume.py
+.venv/bin/python tests/test_output_paths.py
 ```
 
 ## Output
 
-Each taxon is written to `output/<taxon_name>/` by default:
+Each run is written to `output/YYYYMMDD_<taxon_name>/` by default:
 
 ```text
-dwc.csv
-dwc.tsv
-images/
-logs/
-summary.txt
+output/20260726_Haplopteris_mediosora/
+  dwc.csv
+  dwc.tsv
+  images/
+  logs/
+  summary.txt
 ```
+
+If a completed directory with the same date and taxon already exists, the next
+run uses `_02`, `_03`, and so on. An interrupted directory is never silently
+overwritten.
 
 `logs/run_<timestamp>.log` records structured diagnostic events, source and
 query checkpoints, HTTP retries, errors, and output completion. The file
@@ -148,9 +154,9 @@ Use `--output PATH` to choose another output directory.
 
 ## Resume An Interrupted Run
 
-During collection, progress and temporary response caches are stored under
-`output/<taxon_name>/.resume/`. If the process is interrupted, repeat the same
-command with `--resume`:
+During collection, progress and temporary response caches are stored under the
+dated output directory's `.resume/` folder. If the process is interrupted,
+repeat the same command with `--resume`:
 
 ```bash
 bash run_collect_specimens.sh --resume \
@@ -163,7 +169,9 @@ The taxon, synonyms, sources, record limit, image profile, and GBIF filters
 must match the interrupted command. The program resumes at the next unfinished
 name/source checkpoint. If interruption occurred inside a long query, cached
 responses are reused so completed requests are not repeated. Existing
-downloaded images are also validated and reused.
+downloaded images are also validated and reused. When `--output` was not
+specified, `--resume` finds the matching interrupted directory automatically,
+including one created on an earlier date.
 
 Use `--restart` with the intended command to discard an incompatible or
 unwanted checkpoint. The `.resume/` directory is removed automatically after

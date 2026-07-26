@@ -21,6 +21,7 @@ from .diagnostics import RunLogger
 from .http_client import PoliteHttpClient
 from .images import download_images, gbif_image_cache_urls, prune_unreferenced_images
 from .models import SpecimenRecord
+from .output_paths import resolve_output_directory
 from .outputs import RunReport, SourceReport, write_dwc_exports, write_summary
 from .progress import TerminalProgress
 from .records import (
@@ -252,7 +253,7 @@ def collect_source_records(
 
 def collector_version(project_dir: Path) -> str:
     version_file = project_dir / "VERSION.txt"
-    return version_file.read_text(encoding="utf-8").strip() if version_file.exists() else "v0.1.3"
+    return version_file.read_text(encoding="utf-8").strip() if version_file.exists() else "v0.1.4"
 
 
 def image_download_settings(settings: dict, profile_name: str) -> dict:
@@ -371,11 +372,6 @@ def run_pipeline(
 
     download_settings = image_download_settings(settings, image_resolution)
     version = collector_version(project_dir)
-    destination = (
-        output_dir.resolve()
-        if output_dir
-        else project_dir / "output" / safe_token(accepted_name)
-    )
     signature = run_signature(
         version=version,
         accepted_name=accepted_name,
@@ -386,6 +382,14 @@ def run_pipeline(
         image_resolution=image_resolution,
         gbif_settings=settings["gbif"],
         settings=settings,
+    )
+    destination = resolve_output_directory(
+        project_dir=project_dir,
+        accepted_name=accepted_name,
+        signature=signature,
+        output_dir=output_dir,
+        resume=resume,
+        restart=restart,
     )
 
     if dry_run:
