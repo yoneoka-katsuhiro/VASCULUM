@@ -8,7 +8,11 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "scripts"))
 
-from georeference_curator.geocoding import extract_decimal_coordinates
+from georeference_curator.geocoding import (
+    extract_decimal_coordinates,
+    is_precise_label_coordinate,
+)
+from georeference_curator.elevation import parse_elevation_meters, round_elevation
 from georeference_curator.geospatial_refinement import (
     EnvironmentalFeature,
     GeospatialContext,
@@ -21,12 +25,16 @@ from georeference_curator.habitat import habitat_vocabulary, parse_habitats
 from georeference_curator.labels import detect_languages
 from georeference_curator.llm import (
     LlmSettings,
+    build_transcription_prompt,
     llm_response_to_candidates,
     model_candidates_for,
     normalize_provider,
+    search_policy,
 )
+from georeference_curator.llm_cache import LlmResponseCache
 from georeference_curator.models import LabelRead
-from georeference_curator.pipeline import run_pipeline
+from georeference_curator.parallel import RateLimitBackoff, resolve_worker_count
+from georeference_curator.pipeline import process_row, run_pipeline
 from georeference_curator.progress import TerminalProgress
 from georeference_curator.scoring import (
     SelectionOptions,
@@ -69,6 +77,7 @@ def run_test_pipeline(input_dir: Path, output_dir: Path, curation_mode: str):
         llm_command="",
         llm_api_key_env="OPENAI_API_KEY",
         llm_timeout_seconds=120,
+        llm_rate_limit_retries=0,
         confirm_llm=False,
         georeferenced_by="test",
         prompt_profile="xie-modified",
@@ -79,6 +88,7 @@ def run_test_pipeline(input_dir: Path, output_dir: Path, curation_mode: str):
         taxon_habitat="fern",
         debug_log=True,
         limit=0,
+        workers="1",
         progress=TerminalProgress(enabled=False),
     )
 
@@ -87,7 +97,23 @@ def main() -> None:
     assert detect_languages("TAIWAN: Formosa: Mt. Arisan 阿里山") == ["zh", "en/la"]
     assert normalize_provider("codex") == "codex-cli"
     assert normalize_provider("opus") == "opus5"
-    assert model_candidates_for(LlmSettings(provider="codex-cli", model="auto"))[0] == "gpt-5.6-sol"
+    assert model_candidates_for(LlmSettings(provider="codex-cli", model="auto"))[0] == "gpt-5.5"
+    assert resolve_worker_count(
+        "auto",
+        project_dir=ROOT,
+        provider="codex-cli",
+        model_label="gpt-5.5",
+        web_search_mode="indexed",
+        records=10,
+    ) >= 2
+    assert resolve_worker_count(
+        "max",
+        project_dir=ROOT,
+        provider="codex-cli",
+        model_label="gpt-5.5",
+        web_search_mode="indexed",
+        records=10,
+    ) >= 4
     coordinates = extract_decimal_coordinates("TWD 67: N 23° 27′ E 120° 55′ Alt. 3050 m")
     assert len(coordinates) == 1
     assert abs(coordinates[0].latitude - 23.45) < 0.0001
@@ -123,6 +149,19 @@ def main() -> None:
     )
     assert len(seconds_coordinate) == 1
     assert seconds_coordinate[0].uncertainty_meters == 30
+    assert is_precise_label_coordinate(seconds_coordinate[0])
+    suffix_coordinate = extract_decimal_coordinates(
+        "23°31′22″ N, 120°48′30″ E"
+    )
+    assert len(suffix_coordinate) == 1
+    assert abs(suffix_coordinate[0].latitude - 23.5227778) < 0.000001
+    assert abs(suffix_coordinate[0].longitude - 120.8083333) < 0.000001
+    assert is_precise_label_coordinate(suffix_coordinate[0])
+    assert not is_precise_label_coordinate(no_false_seconds[0])
+    assert parse_elevation_meters("Alt. 6500 ft") == (1981, 1981)
+    assert parse_elevation_meters("6000-6500 feet") == (1829, 1981)
+    assert parse_elevation_meters("2040 m") == (2040, 2040)
+    assert round_elevation(2285, 10) == 2290
 
     label = LabelRead(
         catalog_number="P01185529",
@@ -130,6 +169,145 @@ def main() -> None:
         locality_text="Taiwan JiaYi County ZiZhong",
         label_status="llm_image_transcribed",
     )
+    assert search_policy(
+        {"country": "Japan", "locality": "長野県川上村"},
+        LabelRead(detected_languages=["ja/zh"], label_transcription="長野県川上村"),
+    )["chineseFallbackAllowed"] is False
+    assert search_policy(
+        {"country": "Chinese Taipei", "locality": "阿里山"},
+        LabelRead(detected_languages=["zh"], label_transcription="阿里山"),
+    )["chineseFallbackAllowed"] is True
+    transcription_prompt = build_transcription_prompt(
+        {"catalogNumber": "TEST", "country": "Japan"},
+        LabelRead(image_quality_status="image_available"),
+    )
+    assert "transcription_only" in transcription_prompt
+    assert "Do not browse the web" in transcription_prompt
+
+    with tempfile.TemporaryDirectory() as cache_tmpdir:
+        cache = LlmResponseCache(Path(cache_tmpdir))
+        cache_key = cache.key(
+            purpose="transcription_only",
+            provider="codex-cli",
+            model="gpt-test",
+            reasoning_effort="medium",
+            web_search_mode="disabled",
+            prompt=transcription_prompt,
+            image_paths=[],
+        )
+        assert cache.get(cache_key) is None
+        cache.put(cache_key, {"status": "ok"})
+        assert cache.get(cache_key) == {"status": "ok"}
+    direct_label_result = select_result(
+        row={
+            "catalogNumber": "DIRECTCOORD",
+            "decimalLatitude": "",
+            "decimalLongitude": "",
+        },
+        label=LabelRead(
+            catalog_number="DIRECTCOORD",
+            label_transcription="23°31′22″ N, 120°48′30″ E",
+            locality_text="specific collecting locality",
+            label_status="transcribed",
+        ),
+        raw_label_coordinates=suffix_coordinate,
+        llm_candidates=[],
+        gazetteer_matches=[],
+        insufficient_locality="",
+        exclude_insufficient_locality=True,
+        options=SelectionOptions(curation_mode="robust"),
+    )
+    assert direct_label_result.row["decimalLatitude"] == "23.522778"
+    assert direct_label_result.row["decimalLongitude"] == "120.808333"
+    assert direct_label_result.verification_status == "selected_label_coordinate"
+
+    class FakeClient:
+        def __init__(self, response):
+            self.response = response
+            self.calls = 0
+
+        def create_json(self, _prompt, image_paths=None):
+            self.calls += 1
+            return dict(self.response)
+
+    with tempfile.TemporaryDirectory() as routing_tmpdir:
+        routing_dir = Path(routing_tmpdir).resolve()
+        image_dir = routing_dir / "images"
+        image_dir.mkdir()
+        (image_dir / "DIRECT_IMAGE.jpg").write_bytes(b"jpg")
+        transcription_client = FakeClient(
+            {
+                "status": "ok",
+                "detectedLanguages": ["en"],
+                "labelTranscription": (
+                    "Specific mountain trail. 23°31′22″ N, 120°48′30″ E"
+                ),
+                "localityText": "Specific mountain trail",
+                "eventDateText": "",
+                "collectorText": "",
+                "elevationText": "",
+                "localityMentions": ["Specific mountain trail"],
+                "coordinateCandidates": [],
+                "remarks": "",
+            }
+        )
+        georeference_client = FakeClient({})
+        georeference_settings = LlmSettings(
+            mode="on",
+            provider="codex-cli",
+            model="gpt-test",
+            reasoning_effort="high",
+            timeout_seconds=600,
+            web_search_mode="live",
+        )
+        transcription_settings = LlmSettings(
+            mode="on",
+            provider="codex-cli",
+            model="gpt-test",
+            reasoning_effort="medium",
+            timeout_seconds=600,
+            web_search_mode="disabled",
+        )
+        routing_outcome = process_row(
+            index=1,
+            total_rows=1,
+            row={
+                "catalogNumber": "DIRECT_IMAGE",
+                "country": "Chinese Taipei",
+                "locality": "Specific mountain trail",
+                "verbatimLocality": "Specific mountain trail",
+                "decimalLatitude": "",
+                "decimalLongitude": "",
+                "associatedMedia": "images/DIRECT_IMAGE.jpg",
+            },
+            source_dir=routing_dir,
+            sidecars={},
+            gazetteer=[],
+            llm_client=georeference_client,
+            llm_settings=georeference_settings,
+            transcription_llm_client=transcription_client,
+            transcription_llm_settings=transcription_settings,
+            llm_cache=LlmResponseCache(routing_dir / "cache", enabled=False),
+            llm_rate_limit_retries=0,
+            llm_backoff=RateLimitBackoff(retries=0),
+            refinement_settings=GeospatialRefinementSettings(enabled=False),
+            verification_timeout_seconds=600,
+            habitat_preference=parse_habitats("subalpine forest"),
+            normalized_habitat="subalpine forest",
+            original_precision_decimals=4,
+            exclude_insufficient_locality=True,
+            options=SelectionOptions(curation_mode="robust"),
+            prompt_profile="xie-modified",
+            use_trails=True,
+            use_hydrology=True,
+            use_dem=True,
+            use_vegetation_prior=True,
+            progress=TerminalProgress(enabled=False),
+        )
+        assert transcription_client.calls == 1
+        assert georeference_client.calls == 0
+        assert routing_outcome.llm_skipped_precise_label == 1
+        assert routing_outcome.result.row["decimalLatitude"] == "23.522778"
     llm_candidates = llm_response_to_candidates(
         {
             "coordinateCandidates": [
@@ -214,7 +392,7 @@ def main() -> None:
         options=SelectionOptions(curation_mode="robust"),
     )
     assert anchor_selection.row["decimalLatitude"] == "23.484080"
-    assert anchor_selection.row["minimumElevationInMeters"] == "2282"
+    assert anchor_selection.row["minimumElevationInMeters"] == "3050"
     assert anchor_selection.verification_status == "review_selected_llm_web_locality_anchor"
 
     route_points = [
@@ -250,7 +428,7 @@ def main() -> None:
     assert refinement.candidate.candidate_type == "route_dem_refinement"
     assert refinement.candidate.candidate_latitude == "23.484123"
     assert refinement.candidate.candidate_longitude == "120.830456"
-    assert refinement.candidate.candidate_elevation_meters == "2285"
+    assert refinement.candidate.candidate_elevation_meters == "2290"
     assert refinement.candidate.candidate_uncertainty_meters == "500"
     assert "openstreetmap.org/way/12345" in refinement.candidate.source_urls
 
@@ -270,7 +448,7 @@ def main() -> None:
     )
     assert route_selection.selected_candidate is refinement.candidate
     assert route_selection.row["decimalLatitude"] == "23.484123"
-    assert route_selection.row["minimumElevationInMeters"] == "2285"
+    assert route_selection.row["minimumElevationInMeters"] == "3050"
     assert route_selection.verification_status.startswith("review_route_dem")
 
     city_point = RoutePoint(
@@ -522,6 +700,7 @@ def main() -> None:
             llm_command="",
             llm_api_key_env="OPENAI_API_KEY",
             llm_timeout_seconds=120,
+            llm_rate_limit_retries=0,
             confirm_llm=False,
             georeferenced_by="test",
             prompt_profile="xie-modified",
@@ -532,6 +711,7 @@ def main() -> None:
             taxon_habitat="fern",
             debug_log=True,
             limit=0,
+            workers="1",
             progress=TerminalProgress(enabled=False),
         )
         assert dry_report.records_read == 5

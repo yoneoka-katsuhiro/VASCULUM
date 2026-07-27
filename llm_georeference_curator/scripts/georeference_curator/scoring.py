@@ -2,11 +2,12 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from .elevation import parse_elevation_meters
+from .elevation import parse_elevation_meters, round_elevation
 from .geocoding import (
     GazetteerMatch,
     RawCoordinate,
     haversine_km,
+    is_precise_label_coordinate,
     parse_decimal,
     uncertainty_from_precision,
     valid_lat_lon,
@@ -19,6 +20,7 @@ ROBUST_LLM_MAX_UNCERTAINTY_METERS = 10000
 ROBUST_LLM_MIN_SCORE = 0.60
 ROBUST_WEB_ANCHOR_MAX_UNCERTAINTY_METERS = 5000
 ROBUST_ROUTE_DEM_MAX_UNCERTAINTY_METERS = 5000
+INFERRED_ELEVATION_GRANULARITY_METERS = 10
 
 
 @dataclass
@@ -103,14 +105,20 @@ def original_candidate(row, label: LabelRead, status: str):
 
 def label_coordinate_candidates(raw_coordinates, label: LabelRead):
     base = candidate_base(label)
-    minimum, maximum = parse_elevation_meters(label.elevation_text)
+    minimum, maximum = parse_elevation_meters(
+        label.elevation_text or label.label_transcription
+    )
     elevation = ""
     if minimum is not None and maximum is not None:
         elevation = str(round((minimum + maximum) / 2))
     candidates = []
     for raw in raw_coordinates:
-        latitude_text = f"{raw.latitude:.8f}".rstrip("0").rstrip(".")
-        longitude_text = f"{raw.longitude:.8f}".rstrip("0").rstrip(".")
+        if is_precise_label_coordinate(raw):
+            latitude_text = f"{raw.latitude:.6f}"
+            longitude_text = f"{raw.longitude:.6f}"
+        else:
+            latitude_text = f"{raw.latitude:.8f}".rstrip("0").rstrip(".")
+            longitude_text = f"{raw.longitude:.8f}".rstrip("0").rstrip(".")
         candidates.append(
             CoordinateCandidate(
                 **base,
@@ -468,23 +476,33 @@ def select_result(
         curated.setdefault("georeferenceProtocol", "")
         curated.setdefault("georeferenceSources", "")
 
-    selected_elevation = (
-        number_or(selected.candidate_elevation_meters, float("nan"))
-        if selected
-        else float("nan")
+    label_elevation_minimum, label_elevation_maximum = parse_elevation_meters(
+        label.elevation_text
+        or label.label_transcription
+        or curated.get("verbatimElevation", "")
     )
-    if selected_elevation == selected_elevation:
-        rounded_elevation = str(round(selected_elevation))
-        curated["minimumElevationInMeters"] = rounded_elevation
-        curated["maximumElevationInMeters"] = rounded_elevation
+    elevation_note = ""
+    if label_elevation_minimum is not None and label_elevation_maximum is not None:
+        curated["minimumElevationInMeters"] = str(label_elevation_minimum)
+        curated["maximumElevationInMeters"] = str(label_elevation_maximum)
+        elevation_note = "elevation_source=specimen_label"
     else:
-        minimum, maximum = parse_elevation_meters(
-            label.elevation_text or curated.get("verbatimElevation", "")
+        selected_elevation = (
+            number_or(selected.candidate_elevation_meters, float("nan"))
+            if selected
+            else float("nan")
         )
-        if minimum is not None and not curated.get("minimumElevationInMeters"):
-            curated["minimumElevationInMeters"] = str(minimum)
-        if maximum is not None and not curated.get("maximumElevationInMeters"):
-            curated["maximumElevationInMeters"] = str(maximum)
+        if selected_elevation == selected_elevation:
+            rounded_elevation = round_elevation(
+                selected_elevation,
+                INFERRED_ELEVATION_GRANULARITY_METERS,
+            )
+            curated["minimumElevationInMeters"] = str(rounded_elevation)
+            curated["maximumElevationInMeters"] = str(rounded_elevation)
+            elevation_note = (
+                "elevation_source=estimated; "
+                f"elevation_granularity_m={INFERRED_ELEVATION_GRANULARITY_METERS}"
+            )
 
     remarks = [
         f"VASCULUM decision={decision}",
@@ -499,6 +517,8 @@ def select_result(
             remarks.append(
                 f"uncertainty_m={selected.candidate_uncertainty_meters}"
             )
+    if elevation_note:
+        remarks.append(elevation_note)
     remarks.extend(notes)
     curated["georeferenceRemarks"] = "; ".join(remarks)
 

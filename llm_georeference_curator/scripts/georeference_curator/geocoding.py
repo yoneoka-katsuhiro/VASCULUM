@@ -55,6 +55,21 @@ def valid_lat_lon(latitude: float, longitude: float) -> bool:
     return -90 <= latitude <= 90 and -180 <= longitude <= 180
 
 
+def is_precise_label_coordinate(raw: RawCoordinate) -> bool:
+    datum = re.sub(r"[^A-Z0-9]", "", (raw.datum or "WGS84").upper())
+    if datum not in {"", "WGS84", "EPSG4326"}:
+        return False
+    if raw.precision_kind == "dms_seconds":
+        return True
+    decimal_match = re.fullmatch(r"decimal_(\d+)dp", raw.precision_kind or "")
+    if decimal_match:
+        return int(decimal_match.group(1)) >= 4
+    return bool(
+        raw.precision_kind == "dms_minutes"
+        and 0 < raw.uncertainty_meters <= 500
+    )
+
+
 def decimal_places(value: str) -> int:
     text = str(value).strip()
     match = re.search(r"\.(\d+)", text)
@@ -126,6 +141,31 @@ def extract_decimal_coordinates(text: str):
                     )
                 )
 
+    decimal_suffix_pattern = re.compile(
+        r"(\d{1,2}(?:\.\d+)?)\s*°?\s*([NS])"
+        r".{0,40}?"
+        r"(\d{1,3}(?:\.\d+)?)\s*°?\s*([EW])",
+        flags=re.I | re.S,
+    )
+    for match in decimal_suffix_pattern.finditer(text):
+        latitude_text, latitude_hemisphere = match.group(1), match.group(2)
+        longitude_text, longitude_hemisphere = match.group(3), match.group(4)
+        latitude = float(latitude_text) * (-1 if latitude_hemisphere.upper() == "S" else 1)
+        longitude = float(longitude_text) * (-1 if longitude_hemisphere.upper() == "W" else 1)
+        if valid_lat_lon(latitude, longitude):
+            places = min(decimal_places(latitude_text), decimal_places(longitude_text))
+            results.append(
+                RawCoordinate(
+                    latitude,
+                    longitude,
+                    match.group(0),
+                    "decimal",
+                    detect_datum(match.group(0)),
+                    uncertainty_from_precision(latitude_text, longitude_text),
+                    f"decimal_{places}dp",
+                )
+            )
+
     dms_pattern = re.compile(
         r"([NS])[ \t]*(\d{1,2})"
         r"(?:[ \t]*[°º][ \t]*(\d{1,2}(?:\.\d+)?)"
@@ -152,6 +192,48 @@ def extract_decimal_coordinates(text: str):
                 if match.group(4) is not None and match.group(8) is not None
                 else "dms_minutes"
                 if match.group(3) is not None and match.group(7) is not None
+                else "dms_degrees"
+            )
+            results.append(
+                RawCoordinate(
+                    lat,
+                    lon,
+                    source_text,
+                    "dms",
+                    detect_datum(context),
+                    uncertainty,
+                    precision_kind,
+                )
+            )
+
+    dms_suffix_pattern = re.compile(
+        r"(\d{1,2})[ \t]*[°º]"
+        r"(?:[ \t]*(\d{1,2}(?:\.\d+)?)[ \t]*[′']"
+        r"(?:[ \t]*(\d{1,2}(?:\.\d+)?)[ \t]*[″\"]?)?)?"
+        r"[ \t]*([NS])"
+        r".{0,40}?"
+        r"(\d{1,3})[ \t]*[°º]"
+        r"(?:[ \t]*(\d{1,2}(?:\.\d+)?)[ \t]*[′']"
+        r"(?:[ \t]*(\d{1,2}(?:\.\d+)?)[ \t]*[″\"]?)?)?"
+        r"[ \t]*([EW])",
+        flags=re.I | re.S,
+    )
+    for match in dms_suffix_pattern.finditer(text):
+        source_text = match.group(0)
+        lat = dms_to_decimal(match.group(1), match.group(2), match.group(3), match.group(4))
+        lon = dms_to_decimal(match.group(5), match.group(6), match.group(7), match.group(8))
+        if valid_lat_lon(lat, lon):
+            context_start = max(0, match.start() - 20)
+            context_end = min(len(text), match.end() + 20)
+            context = text[context_start:context_end]
+            uncertainty = uncertainty_from_dms_components(
+                match.group(2), match.group(3), match.group(6), match.group(7)
+            )
+            precision_kind = (
+                "dms_seconds"
+                if match.group(3) is not None and match.group(7) is not None
+                else "dms_minutes"
+                if match.group(2) is not None and match.group(6) is not None
                 else "dms_degrees"
             )
             results.append(

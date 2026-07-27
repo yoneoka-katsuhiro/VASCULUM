@@ -1,6 +1,6 @@
 # LLM Georeference Curator
 
-Version: `v0.1.6`
+Version: `v0.1.7`
 
 `llm_georeference_curator` performs LLM-assisted georeferencing for
 `herbarium_specimen_collector` outputs. It reads collector DwC exports and
@@ -55,11 +55,28 @@ bash run_llm_georeference_curator.sh \
   --llm-mode on
 ```
 
-The default `xie-modified` profile uses live web search. A coarse label
-coordinate such as `N 23°31′ E 120°48′` is a search anchor, not the final
-result. The LLM refines it with locality names, historical toponyms,
-roads/trails, elevation, terrain, hydrology, vegetation, collector context,
-and auditable sources. For source-backed trail/locality anchors, the default
+The default `xie-modified` profile uses a token-conscious three-stage flow:
+
+1. Read the whole specimen image without web search. If a detailed WGS84 label
+   coordinate is found, convert it to six-decimal decimal degrees and stop.
+2. Only when no detailed coordinate exists and the locality reaches
+   municipality or a comparably specific level, research a coordinate from the
+   transcription without sending the image again.
+3. Verify researched coordinates against available terrain, habitat, route,
+   hydrology, and DEM evidence.
+
+A coarse label coordinate such as `N 23°31′ E 120°48′` is a search anchor, not
+the final result. Web research starts with the label language and only the most
+widely used relevant official/local language of the collecting country. It
+stops when a defensible source-backed locality is found. English is used only
+if unresolved. Chinese is considered only for Chinese-language regions,
+Chinese label text, or specifically relevant historical sources; it is not a
+universal fallback. It refines coordinates with locality names,
+historical toponyms, roads/trails, elevation, terrain, hydrology, vegetation,
+collector context, and auditable sources. The profile follows Xie et al. (2025)
+as a first-pass LLM georeferencing protocol, with VASCULUM additions for image
+label reading and ecological review. For source-backed trail/locality anchors,
+the default
 post-processing stage queries nearby OpenStreetMap trail/road vertices and
 mapped land-use, vegetation, water, coast, and substrate context, then compares
 their Open-Meteo Copernicus 90 m DEM elevations with the researched elevation.
@@ -138,15 +155,32 @@ not sent to those two services. Use
 `--yes` only for intentional unattended runs.
 
 While an LLM or environmental refinement request is running, the terminal
-shows an animated status line containing the provider, model, record number,
-catalog number, and elapsed seconds. Long `xhigh` web-research calls therefore
-remain visibly active until completion or timeout.
+shows an animated or repeated status line containing the provider, model,
+record number, catalog number, and elapsed seconds. Long web-research calls
+therefore remain visibly active until completion or timeout.
 
-Default model selection is `auto`. Candidate order can be set in `.env`:
+Default model selection is `auto`, which currently prefers `gpt-5.5` for
+routine high-throughput curation and keeps `gpt-5.6-sol` as the first fallback
+or explicit deep-review model. Coordinate research uses reasoning `high`;
+image transcription uses `medium` with web search disabled. Label reading,
+coordinate research, and coordinate verification each default to 600 seconds:
 
 ```bash
-CODEX_MODEL_CANDIDATES=gpt-5.6-sol,gpt-5.5
-LLM_REASONING_EFFORT=xhigh
+--label-timeout-seconds 600 \
+--georeference-timeout-seconds 600 \
+--verification-timeout-seconds 600
+```
+
+Matching LLM responses are cached under
+`.cache/llm_georeference_curator/`, so rerunning unchanged records does not
+spend tokens again. Disable this only when intentionally re-evaluating every
+record with `--no-llm-cache`. Candidate order can be set in
+`.env`:
+
+```bash
+CODEX_MODEL_CANDIDATES=gpt-5.5,gpt-5.6-sol
+LLM_REASONING_EFFORT=high
+VASCULUM_LLM_WORKERS=4
 ```
 
 Run explicitly with Codex:
@@ -156,8 +190,39 @@ bash run_llm_georeference_curator.sh \
   --input ../herbarium_specimen_collector/output/Haplopteris_mediosora_low \
   --llm-provider codex-cli \
   --llm-model auto \
+  --llm-web-search indexed
+```
+
+Use `gpt-5.6-sol` explicitly for difficult review cases:
+
+```bash
+bash run_llm_georeference_curator.sh \
+  --input ../herbarium_specimen_collector/output/Haplopteris_mediosora_low \
+  --llm-model gpt-5.6-sol \
+  --llm-reasoning-effort xhigh \
   --llm-web-search live
 ```
+
+## Parallel Processing
+
+Records are independent, so the curator can process them in parallel:
+
+```bash
+--workers auto
+```
+
+`auto` is the default. It chooses a provider-aware worker count, lowers the
+cap for heavier `gpt-5.6-sol` or live-search runs, and respects
+`VASCULUM_LLM_WORKERS`, `VASCULUM_MAX_WORKERS`, or Codex
+`agents.max_concurrent_threads_per_session` when configured. Use
+`--workers max` to use the configured cap, or a positive integer such as
+`--workers 6` when you intentionally want a fixed limit.
+
+The implementation follows OpenAI's rate-limit guidance: rate-limit or
+usage-limit failures are retried with exponential backoff
+(`--llm-rate-limit-retries`, default `2`). Non-rate-limit failures, including
+timeouts and invalid JSON, are recorded in `summary.txt` and
+`georeference.log.jsonl` rather than silently retried.
 
 Unattended run after you have already checked the provider:
 
@@ -195,9 +260,11 @@ custom commands are `{model}`, `{prompt_file}`, and `{image_paths}`.
 
 ## Whole-Image Policy
 
-The pipeline passes whole specimen images to multimodal providers. It does not
-perform command-line label cropping as part of v0.1.6. The prompt instructs the
-LLM to:
+The pipeline passes a whole specimen image to the label-reading stage only when
+the image has not already been transcribed and the original DwC coordinate is
+not already precise. It does not perform command-line label cropping. The
+coordinate-research stage receives the transcription rather than the image.
+The prompts instruct the LLM to:
 
 - identify the main original collection label first
 - distinguish annotation, determination, barcode, accession, exchange, and later
@@ -205,15 +272,30 @@ LLM to:
 - avoid mixing locality evidence across labels unless it clearly refers to the
   same collecting event
 - transcribe only confidently readable text
-- search current and historical names in the country's own language and English
+- search with the label language and one major collecting-country language,
+  then use English only if unresolved
+- use Chinese only when the specimen or historical-source context makes it
+  relevant
 - cross-check gazetteers, roads/trails, elevation, terrain, hydrology,
-  vegetation, and collector context when available
+  vegetation, land-use, public map/satellite context, and collector context
+  when available
 - record source URLs and evidence layers for refined candidates
 - return no coordinate candidates when locality is too broad or unreadable
 
 Images that are small or heavily compressed are flagged in
 `georeference_candidates.tsv` with `imageQualityStatus`, but they are still
 passed as whole images.
+
+## Elevation Priority
+
+An elevation printed on the original label always takes precedence over an
+LLM or DEM estimate. Metric values are retained in meters; common imperial
+forms such as `ft`, `feet`, and `foot` are detected and converted to meters.
+Only records without a readable label elevation receive an estimated elevation.
+Estimated values are rounded to a 10 m reporting granularity (for example,
+`2040 m` or `1970 m`). This reporting granularity is recorded in
+`georeferenceRemarks` and is not a claim that a 90 m DEM has guaranteed
+vertical accuracy of plus or minus 10 m.
 
 ## Curation Modes
 

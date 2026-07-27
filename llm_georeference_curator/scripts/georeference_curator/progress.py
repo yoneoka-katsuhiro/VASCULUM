@@ -9,10 +9,16 @@ from contextlib import contextmanager
 class TerminalProgress:
     def __init__(self, enabled: bool = True) -> None:
         self.enabled = enabled
+        self.parallel = False
+        self._lock = threading.Lock()
+
+    def set_parallel(self, enabled: bool) -> None:
+        self.parallel = enabled
 
     def update(self, message: str) -> None:
         if self.enabled:
-            print(message, flush=True)
+            with self._lock:
+                print(message, flush=True)
 
     @contextmanager
     def activity(self, message: str):
@@ -23,7 +29,7 @@ class TerminalProgress:
         stop = threading.Event()
         started = time.monotonic()
         stream = sys.stderr
-        dynamic = stream.isatty()
+        dynamic = stream.isatty() and not self.parallel
 
         def animate() -> None:
             frames = "|/-\\"
@@ -32,10 +38,12 @@ class TerminalProgress:
                 elapsed = int(time.monotonic() - started)
                 text = f"{frames[frame_index % len(frames)]} {message} | {elapsed}s"
                 if dynamic:
-                    stream.write(f"\r{text}")
-                    stream.flush()
+                    with self._lock:
+                        stream.write(f"\r{text}")
+                        stream.flush()
                 elif elapsed == 0 or elapsed % 5 == 0:
-                    print(text, file=stream, flush=True)
+                    with self._lock:
+                        print(text, file=stream, flush=True)
                 frame_index += 1
                 stop.wait(1.0)
 
@@ -47,6 +55,7 @@ class TerminalProgress:
             stop.set()
             thread.join(timeout=2.0)
             elapsed = int(time.monotonic() - started)
-            if dynamic:
-                stream.write("\r\033[K")
-            print(f"Done: {message} | {elapsed}s", file=stream, flush=True)
+            with self._lock:
+                if dynamic:
+                    stream.write("\r\033[K")
+                print(f"Done: {message} | {elapsed}s", file=stream, flush=True)

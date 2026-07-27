@@ -22,14 +22,14 @@ from .models import CoordinateCandidate, LabelRead
 
 DEFAULT_LLM_PROVIDER = "codex-cli"
 DEFAULT_MODEL_AUTO = "auto"
-DEFAULT_REASONING_EFFORT = "xhigh"
+DEFAULT_REASONING_EFFORT = "high"
 REASONING_EFFORTS = {"none", "low", "medium", "high", "xhigh", "max", "ultra"}
 WEB_SEARCH_MODES = {"live", "cached", "indexed", "disabled"}
 LLM_PROVIDERS = {"openai", "codex-cli", "custom-cli", "opus5", "fable5"}
 PROVIDER_ALIASES = {"codex": "codex-cli", "chatgpt": "codex-cli", "opus": "opus5"}
 MODEL_CANDIDATES_BY_PROVIDER = {
-    "codex-cli": ("gpt-5.6-sol", "gpt-5.5"),
-    "openai": ("gpt-5.6-sol", "gpt-5.5"),
+    "codex-cli": ("gpt-5.5", "gpt-5.6-sol"),
+    "openai": ("gpt-5.5", "gpt-5.6-sol"),
     "opus5": ("opus5",),
     "fable5": ("fable5",),
     "custom-cli": ("auto",),
@@ -53,17 +53,29 @@ MODEL_ENVS = {
 SYSTEM_PROMPT = """You are the research agent in a scientific herbarium
 georeferencing pipeline. Return JSON only.
 
-Read the attached whole specimen image directly. Identify the original
-collection label and distinguish it from annotation, determination, barcode,
-accession, exchange, and later herbarium labels. Never combine locality
-evidence from different collecting events. Transcribe only legible text.
+When taskMode is transcription_only, read the attached whole specimen image
+directly. Identify the original collection label and distinguish it from
+annotation, determination, barcode, accession, exchange, and later herbarium
+labels. Never combine locality evidence from different collecting events.
+Transcribe only legible text. When taskMode is georeference, use the supplied
+transcription and DwC fields; an image is intentionally not attached.
 
-Then perform evidence-based georeferencing, not merely coordinate conversion.
-Search the web across official gazetteers, local-language sources, historical
-maps and names, protected-area records, roads, trails, collector itineraries,
-topography, elevation, hydrology, and vegetation when relevant. Search in the
-language of the country as well as English, and resolve historical
-romanizations and former place names.
+Obey the requested task mode. In transcription_only mode, transcribe and
+extract verbatim coordinates but do not research or infer a place. In
+georeference mode, perform evidence-based georeferencing, not merely coordinate
+conversion.
+Follow the Xie et al. 2025 style of translating structured specimen locality
+text into coordinates, while preserving uncertainty and human-verifiable
+evidence. Search official gazetteers, local-language sources, historical maps
+and names, protected-area records, roads, trails, collector itineraries,
+topography, elevation, hydrology, and vegetation when relevant. Start with the
+language or languages of the collecting country and the exact locality strings
+from the label/DwC. If these sources resolve the locality with enough evidence,
+stop expanding the search and return the result. Use English only when the
+primary-language search remains unresolved. Use Chinese only when the
+collection is from a Chinese-language region, the label or historical place
+name uses Chinese characters, or Chinese-language historical sources are
+specifically relevant. Do not apply a universal Chinese fallback.
 
 A label or DwC coordinate recorded only to degrees or whole arcminutes is an
 exploration anchor, not a final georeference. Do not present its decimal
@@ -79,6 +91,9 @@ auditable elevation/topography, land-cover, vegetation, hydrology, coastline,
 and geological-substrate sources as relevant. Prefer official national map
 services; use globally applicable sources such as ESA WorldCover and
 Copernicus land-cover products when local authoritative data are unavailable.
+If vegetation or land-use maps are not findable in a reasonable search window,
+use accessible public map, terrain, or satellite/aerial imagery context as
+supporting evidence, but do not rely on imagery alone to invent an exact point.
 Reject obvious contradictions,
 such as a subalpine forest species placed in a low-elevation built-up city or
 a marine species placed inland. Absence of mapped habitat data is unknown, not
@@ -167,7 +182,7 @@ class LlmSettings:
     reasoning_effort: str = DEFAULT_REASONING_EFFORT
     api_key_env: str = "OPENAI_API_KEY"
     command: str = ""
-    timeout_seconds: int = 180
+    timeout_seconds: int = 600
     web_search_mode: str = "live"
 
     @property
@@ -340,9 +355,9 @@ def build_user_prompt(
     use_vegetation_prior: bool = True,
 ) -> str:
     habitat_preference = parse_habitats(taxon_habitat)
-    payload = {
+    payload = compact_mapping({
+        "taskMode": "georeference",
         "catalogNumber": row.get("catalogNumber", ""),
-        "occurrenceID": row.get("occurrenceID", ""),
         "scientificName": row.get("scientificName", ""),
         "country": row.get("country", ""),
         "stateProvince": row.get("stateProvince", ""),
@@ -353,12 +368,12 @@ def build_user_prompt(
         "eventDate": row.get("eventDate", ""),
         "recordedBy": row.get("recordedBy", ""),
         "recordNumber": row.get("recordNumber", ""),
+        "verbatimCoordinates": row.get("verbatimCoordinates", ""),
+        "verbatimLatitude": row.get("verbatimLatitude", ""),
+        "verbatimLongitude": row.get("verbatimLongitude", ""),
         "verbatimElevation": row.get("verbatimElevation", ""),
         "originalDecimalLatitude": row.get("decimalLatitude", ""),
         "originalDecimalLongitude": row.get("decimalLongitude", ""),
-        "imagePath": label.image_path,
-        "imageQualityStatus": label.image_quality_status,
-        "imageQualityRemarks": label.image_quality_remarks,
         "labelStatus": label.label_status,
         "labelTranscription": label.label_transcription,
         "detectedLanguages": label.detected_languages,
@@ -370,23 +385,29 @@ def build_user_prompt(
             "demAndElevation": use_dem,
             "vegetationAndHabitat": use_vegetation_prior,
         },
-    }
+        "searchPolicy": search_policy(row, label),
+    })
     return (
-        "Georeference this herbarium specimen from DwC and whole-specimen image evidence.\n"
-        "Identify the main original collection label before transcribing. Ignore annotation, "
-        "determination, barcode, accession, exchange, and later herbarium labels as locality "
-        "sources unless they clearly repeat the original collecting event. Do not infer text "
-        "that is not legible.\n\n"
-        "After transcription, conduct multilingual web research. Search current and historical "
-        "place names in the country's own language and English. Cross-check official or otherwise "
-        "auditable gazetteers, maps, protected-area sources, roads or trails, collector routes, "
-        "and elevation/topography. When a habitat prior is supplied, verify each candidate against "
-        "relevant official topographic, land-use, land-cover, vegetation, hydrology, coastline, or "
-        "geological maps. Use national sources first and ESA WorldCover or Copernicus land-cover "
-        "products as global fallbacks. Reject clear ecological contradictions and explain the "
-        "habitat evidence layer. Treat "
-        "missing map coverage as unknown rather than unsuitable. When possible, compare at least two "
-        "independent sources and record their URLs.\n\n"
+        "Georeference this already-transcribed herbarium collecting event. Do not re-read or "
+        "request the specimen image. Conduct staged web research following the Xie et al. 2025 "
+        "first-pass georeferencing idea. Start with the language visible on the original label "
+        "and only the single most widely used relevant official/local language of the collecting "
+        "country; do not iterate through every official language. Stop immediately when "
+        "the locality is resolved with defensible evidence. Use English only if unresolved. "
+        "Use Chinese only when searchPolicy.chineseFallbackAllowed is true and the previous "
+        "stage remains unresolved. Do not perform all stages by default. Use at most four "
+        "targeted search queries unless same-name localities require disambiguation. Cross-check "
+        "official or otherwise auditable "
+        "gazetteers, maps, protected-area sources, roads or trails, collector routes, "
+        "and elevation/topography. When a habitat prior is supplied, verify each candidate "
+        "against relevant official topographic, land-use, land-cover, vegetation, hydrology, "
+        "coastline, or geological maps. Use national sources first and ESA WorldCover or "
+        "Copernicus land-cover products as global fallbacks. If these layers are not "
+        "findable in a reasonable search window, use accessible public map, terrain, or "
+        "satellite/aerial imagery context as supporting evidence. Reject clear ecological "
+        "contradictions and explain the habitat evidence layer. Treat missing map coverage "
+        "as unknown rather than unsuitable. When possible, compare at least two independent "
+        "sources and record their URLs.\n\n"
         "Important: a coordinate printed only to degrees or whole arcminutes defines a coarse "
         "search area. It is not an acceptable final coordinate for this task. Do not return its "
         "decimal conversion as a refined result. A refined candidate must be independently placed "
@@ -401,8 +422,91 @@ def build_user_prompt(
         "collection point cannot be defended, also return the best specific, web-supported "
         "'place_centroid' or trail/road anchor as a reviewable fallback point estimate. "
         "Include sourceUrls and evidenceLayers for audit. Coordinates must be defensible.\n\n"
-        + json.dumps(payload, ensure_ascii=False, indent=2)
+        + json.dumps(payload, ensure_ascii=False, separators=(",", ":"))
     )
+
+
+def build_transcription_prompt(row, label: LabelRead) -> str:
+    payload = compact_mapping(
+        {
+            "taskMode": "transcription_only",
+            "catalogNumber": row.get("catalogNumber", ""),
+            "countryHint": row.get("country", ""),
+            "scientificNameHint": row.get("scientificName", ""),
+            "dwcLocalityHint": row.get("verbatimLocality", "")
+            or row.get("locality", ""),
+            "imageQualityStatus": label.image_quality_status,
+        }
+    )
+    return (
+        "Task mode: transcription_only. Read the attached whole specimen image. Identify the "
+        "main original collection label and transcribe its legible collecting-event text, "
+        "including locality, date, collector, elevation, datum, and every printed coordinate. "
+        "Ignore annotation, determination, barcode, accession, exchange, and later herbarium "
+        "labels as locality sources. Do not browse the web, resolve place names, infer a point, "
+        "or add text that is not visible. If a detailed coordinate is printed, include it "
+        "verbatim in labelTranscription and return it as candidateType=verbatim_coordinate; "
+        "otherwise return an empty coordinateCandidates array. Return the standard JSON keys.\n\n"
+        + json.dumps(payload, ensure_ascii=False, separators=(",", ":"))
+    )
+
+
+def compact_mapping(value):
+    if isinstance(value, dict):
+        return {
+            key: compacted
+            for key, item in value.items()
+            if (compacted := compact_mapping(item)) not in ("", None, [], {})
+        }
+    if isinstance(value, list):
+        return [compacted for item in value if (compacted := compact_mapping(item)) not in ("", None, [], {})]
+    return value
+
+
+def search_policy(row, label: LabelRead):
+    country = str(row.get("country", "") or "").strip()
+    evidence_text = " ".join(
+        [
+            country,
+            str(row.get("stateProvince", "") or ""),
+            str(row.get("locality", "") or ""),
+            str(row.get("verbatimLocality", "") or ""),
+            label.label_transcription or "",
+        ]
+    )
+    country_key = country.casefold()
+    chinese_region_terms = (
+        "china",
+        "taiwan",
+        "hong kong",
+        "macao",
+        "macau",
+        "chinese taipei",
+    )
+    japanese_country = "japan" in country_key or "日本" in country
+    has_han = bool(re.search(r"[\u4e00-\u9fff]", evidence_text))
+    has_japanese_kana = bool(re.search(r"[\u3040-\u30ff]", evidence_text))
+    explicit_chinese = any(
+        language.casefold() in {"zh", "zh-cn", "zh-tw", "chinese"}
+        for language in label.detected_languages
+    )
+    chinese_fallback = bool(
+        any(term in country_key for term in chinese_region_terms)
+        or (
+            not japanese_country
+            and (explicit_chinese or (has_han and not has_japanese_kana))
+        )
+    )
+    return {
+        "primary": (
+            "label language plus only the single most widely used relevant "
+            "official/local language of the collecting country"
+        ),
+        "englishFallbackOnlyIfUnresolved": True,
+        "chineseFallbackAllowed": chinese_fallback,
+        "stopWhenResolved": True,
+        "targetedSearchQueryBudget": 4,
+    }
 
 
 class OpenAIResponsesClient:
@@ -560,8 +664,17 @@ class CodexCliClient:
                         user_prompt
                         + "\n\nReturn only the JSON object. Do not edit files. "
                         "Do not run shell commands, OCR commands, image conversion, "
-                        "or image cropping. Use the attached whole image directly. "
-                        "Use hosted web search for the requested multilingual georeferencing research."
+                        "or image cropping. "
+                        + (
+                            "Use the attached whole image directly. "
+                            if image_paths
+                            else "No image is attached; use the supplied transcription and DwC text. "
+                        )
+                        + (
+                            "Do not use web search for this transcription-only request."
+                            if self.settings.web_search_mode == "disabled"
+                            else "Use hosted web search only as directed by the staged search policy."
+                        )
                     ),
                     text=True,
                     capture_output=True,

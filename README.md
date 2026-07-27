@@ -1,6 +1,6 @@
 # VASCULUM
 
-Version: `v0.1.6`
+Version: `v0.1.7`
 
 Repository: <https://github.com/yoneoka-katsuhiro/VASCULUM>
 
@@ -27,7 +27,7 @@ Voucher Archive Search and Curation for Unified Large-scale Use of Metadata
 
 ## Setup
 
-For normal use, download the release asset `VASCULUM-v0.1.6.zip` from GitHub
+For normal use, download the release asset `VASCULUM-v0.1.7.zip` from GitHub
 Releases. It expands to a clean `VASCULUM/` directory.
 
 ```bash
@@ -64,7 +64,8 @@ bash run_collect_and_georeference.sh \
   --prompt-profile xie-modified \
   --habitat "subalpine forest" \
   --use-hydrology \
-  --use-dem
+  --use-dem \
+  --workers auto
 ```
 
 Arguments before `--` are passed to `herbarium_specimen_collector`. Arguments
@@ -76,6 +77,13 @@ curator. The curator reads local image paths from DwC `associatedMedia`, runs
 the selected LLM when coordinates need research, and returns
 `modified_dwc.csv`, `modified_dwc.tsv`, `georeference_candidates.tsv`,
 `summary.txt`, and `georeference.log.jsonl`.
+
+Curator defaults are tuned for routine throughput: `codex-cli`, `gpt-5.5`,
+reasoning `high`, adaptive `--workers auto`, and three 600-second stages for
+label reading, coordinate research, and coordinate verification. Detailed
+label coordinates bypass web research; unchanged LLM responses are cached.
+Use `--llm-model gpt-5.6-sol --llm-reasoning-effort xhigh --llm-web-search live`
+for difficult final review cases.
 
 ## Shared Files
 

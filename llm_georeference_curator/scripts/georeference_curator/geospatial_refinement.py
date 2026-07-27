@@ -4,13 +4,14 @@ import json
 import math
 import os
 import re
+import time
 import unicodedata
 from dataclasses import dataclass, field, replace
 from typing import Callable, Dict, List, Optional, Sequence, Tuple
 from urllib.parse import urlencode
 from urllib.request import Request, urlopen
 
-from .elevation import parse_elevation_meters
+from .elevation import parse_elevation_meters, round_elevation
 from .geocoding import haversine_km
 from .habitat import HabitatPreference
 from .models import CoordinateCandidate, LabelRead
@@ -63,8 +64,19 @@ class GeospatialRefinementSettings:
             "OPEN_METEO_ELEVATION_ENDPOINT", DEFAULT_ELEVATION_ENDPOINT
         )
     )
-    timeout_seconds: int = 45
+    timeout_seconds: int = 600
+    deadline_monotonic: float = 0.0
     user_agent: str = "VASCULUM-llm-georeference-curator/0.1"
+
+
+def remaining_request_timeout(settings: GeospatialRefinementSettings) -> float:
+    timeout = float(max(1, settings.timeout_seconds))
+    if settings.deadline_monotonic:
+        remaining = settings.deadline_monotonic - time.monotonic()
+        if remaining <= 0:
+            raise TimeoutError("Coordinate verification exceeded its stage time limit.")
+        timeout = min(timeout, remaining)
+    return max(0.1, timeout)
 
 
 @dataclass
@@ -209,7 +221,7 @@ def fetch_osm_geospatial_context(
             "User-Agent": settings.user_agent,
         },
     )
-    with urlopen(request, timeout=settings.timeout_seconds) as response:
+    with urlopen(request, timeout=remaining_request_timeout(settings)) as response:
         payload = json.loads(response.read().decode("utf-8"))
 
     points = []
@@ -455,7 +467,7 @@ def fetch_open_meteo_elevations(
         f"{settings.elevation_endpoint}?{query}",
         headers={"Accept": "application/json", "User-Agent": settings.user_agent},
     )
-    with urlopen(request, timeout=settings.timeout_seconds) as response:
+    with urlopen(request, timeout=remaining_request_timeout(settings)) as response:
         payload = json.loads(response.read().decode("utf-8"))
     raw = payload.get("elevation")
     if not isinstance(raw, list) or len(raw) != len(points):
@@ -739,7 +751,9 @@ def target_elevation(
     direct = number_or(anchor.candidate_elevation_meters, float("nan"))
     if math.isfinite(direct):
         return direct
-    minimum, maximum = parse_elevation_meters(label.elevation_text)
+    minimum, maximum = parse_elevation_meters(
+        label.elevation_text or label.label_transcription
+    )
     if minimum is None or maximum is None:
         return None
     return (minimum + maximum) / 2.0
@@ -935,13 +949,14 @@ def build_refined_candidate(
         f"{f' on {route_name}' if route_name else ''}; {elevation_note}; "
         f"{habitat_note}."
     )
+    rounded_elevation = round_elevation(elevation, 10)
     return replace(
         anchor,
         candidate_latitude=f"{selected.latitude:.6f}",
         candidate_longitude=f"{selected.longitude:.6f}",
         candidate_geodetic_datum="WGS84",
         candidate_uncertainty_meters=str(uncertainty_meters),
-        candidate_elevation_meters=str(round(elevation)),
+        candidate_elevation_meters=str(rounded_elevation),
         candidate_type="route_dem_refinement",
         modern_place_name=route_name or anchor.modern_place_name,
         source_urls=" | ".join(dict.fromkeys(source_urls)),

@@ -5,7 +5,7 @@ name, merges duplicate portal records that represent the same physical
 specimen, and downloads linked specimen images at a practical research
 resolution.
 
-Version: `v0.1.6`
+Version: `v0.1.7`
 
 ## Requirements
 

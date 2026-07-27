@@ -27,5 +27,12 @@ Georeferencing and environmental context services:
 LLM-assisted runs should also record and cite the selected provider, model,
 and access date. These values are retained in the curator outputs and logs.
 
+Methodological reference for LLM-assisted georeferencing:
+
+- Xie, Y., Park, D. S., Sinnott-Armstrong, M. A., et al. (2025).
+  Using large language models to address the bottleneck of georeferencing
+  natural history collections. Nature Plants, 11, 2446-2450.
+  https://doi.org/10.1038/s41477-025-02162-y
+
 For research outputs, cite each underlying dataset and institution using the
 information in the DwC export and source record page.

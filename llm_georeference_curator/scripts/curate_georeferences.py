@@ -55,16 +55,67 @@ def parse_args():
         help="Default codex-cli uses saved Codex/ChatGPT login through codex exec.",
     )
     parser.add_argument("--llm-model", default="auto", help="Model name or auto. Provider candidates can be set with CODEX_MODEL_CANDIDATES, OPUS_MODEL_CANDIDATES, etc.")
-    parser.add_argument("--llm-reasoning-effort", default="", help="Reasoning effort. Default: xhigh or environment override.")
+    parser.add_argument("--llm-reasoning-effort", default="", help="Reasoning effort. Default: high or environment override.")
     parser.add_argument(
         "--llm-web-search",
         choices=("live", "cached", "indexed", "disabled"),
         default="live",
-        help="Web research mode. Default live searches current multilingual and historical locality sources.",
+        help=(
+            "Web research mode. Search stops after the first resolved language stage; "
+            "Chinese fallback is used only when the specimen context makes it relevant."
+        ),
     )
     parser.add_argument("--llm-command", default="", help="Command for opus/fable/custom providers. Placeholders: {model}, {prompt_file}, {image_paths}.")
     parser.add_argument("--llm-api-key-env", default="OPENAI_API_KEY", help="Environment variable containing the OpenAI API key.")
-    parser.add_argument("--llm-timeout-seconds", type=int, default=600, help="Timeout for each LLM research request.")
+    parser.add_argument(
+        "--llm-timeout-seconds",
+        type=int,
+        default=600,
+        help="Legacy fallback timeout for stages without an explicit stage timeout.",
+    )
+    parser.add_argument(
+        "--label-timeout-seconds",
+        type=int,
+        help="Whole-image label-reading stage timeout. Default: 600.",
+    )
+    parser.add_argument(
+        "--georeference-timeout-seconds",
+        type=int,
+        help="LLM coordinate-research stage timeout. Default: 600.",
+    )
+    parser.add_argument(
+        "--verification-timeout-seconds",
+        type=int,
+        help="Terrain, habitat, route, and DEM verification stage timeout. Default: 600.",
+    )
+    parser.add_argument(
+        "--llm-rate-limit-retries",
+        type=int,
+        default=2,
+        help="Retry only rate-limit/usage-limit LLM failures with exponential backoff.",
+    )
+    parser.add_argument(
+        "--workers",
+        default="auto",
+        help=(
+            "Parallel record workers: auto, max, or a positive integer. "
+            "auto respects provider/model/search weight and Codex config; max uses the configured cap."
+        ),
+    )
+    parser.add_argument(
+        "--llm-cache",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help="Reuse matching transcription/georeference responses on later runs.",
+    )
+    parser.add_argument(
+        "--llm-cache-dir",
+        type=Path,
+        help=(
+            "Persistent LLM response cache directory. "
+            "Default: <pipeline>/.cache/llm_georeference_curator."
+        ),
+    )
     parser.add_argument("--yes", action="store_true", help="Skip interactive confirmation before real LLM and external geospatial service calls.")
 
     parser.add_argument("--georeferenced-by", default="VASCULUM llm_georeference_curator", help="Value written to DwC georeferencedBy.")
@@ -114,6 +165,17 @@ def main() -> int:
     if args.llm_timeout_seconds <= 0:
         print("ERROR: --llm-timeout-seconds must be greater than 0.", file=sys.stderr)
         return 2
+    for option, value in (
+        ("--label-timeout-seconds", args.label_timeout_seconds),
+        ("--georeference-timeout-seconds", args.georeference_timeout_seconds),
+        ("--verification-timeout-seconds", args.verification_timeout_seconds),
+    ):
+        if value is not None and value <= 0:
+            print(f"ERROR: {option} must be greater than 0.", file=sys.stderr)
+            return 2
+    if args.llm_rate_limit_retries < 0:
+        print("ERROR: --llm-rate-limit-retries must be non-negative.", file=sys.stderr)
+        return 2
     if args.limit < 0:
         print("ERROR: --limit must be non-negative.", file=sys.stderr)
         return 2
@@ -139,6 +201,7 @@ def main() -> int:
             llm_command=args.llm_command,
             llm_api_key_env=args.llm_api_key_env,
             llm_timeout_seconds=args.llm_timeout_seconds,
+            llm_rate_limit_retries=args.llm_rate_limit_retries,
             confirm_llm=not args.yes,
             georeferenced_by=args.georeferenced_by,
             prompt_profile=args.prompt_profile,
@@ -150,6 +213,12 @@ def main() -> int:
             taxon_habitat=" | ".join(habitat_inputs),
             debug_log=args.debug_log,
             limit=args.limit,
+            workers=args.workers,
+            llm_cache_enabled=args.llm_cache,
+            llm_cache_dir=args.llm_cache_dir,
+            label_timeout_seconds=args.label_timeout_seconds,
+            georeference_timeout_seconds=args.georeference_timeout_seconds,
+            verification_timeout_seconds=args.verification_timeout_seconds,
         )
     except (KeyboardInterrupt, EOFError):
         print("\nInterrupted.", file=sys.stderr)
