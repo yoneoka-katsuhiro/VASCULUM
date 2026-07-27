@@ -1,6 +1,6 @@
 # LLM Georeference Curator
 
-Version: `v0.1.5`
+Version: `v0.1.6`
 
 `llm_georeference_curator` performs LLM-assisted georeferencing for
 `herbarium_specimen_collector` outputs. It reads collector DwC exports and
@@ -37,7 +37,7 @@ candidates in one audit table. It is the main file for later checking.
 ## Quick Start
 
 ```bash
-cd VASCULUM-main/llm_georeference_curator
+cd VASCULUM/llm_georeference_curator
 bash run_llm_georeference_curator.sh \
   --input ../herbarium_specimen_collector/output/Haplopteris_mediosora_low \
   --robust \
@@ -196,7 +196,7 @@ custom commands are `{model}`, `{prompt_file}`, and `{image_paths}`.
 ## Whole-Image Policy
 
 The pipeline passes whole specimen images to multimodal providers. It does not
-perform command-line label cropping as part of v0.1.5. The prompt instructs the
+perform command-line label cropping as part of v0.1.6. The prompt instructs the
 LLM to:
 
 - identify the main original collection label first

@@ -5,6 +5,20 @@ ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 COLLECTOR_DIR="${ROOT_DIR}/herbarium_specimen_collector"
 CURATOR_DIR="${ROOT_DIR}/llm_georeference_curator"
 
+if [[ "${1:-}" == "-h" || "${1:-}" == "--help" ]]; then
+  printf '%s\n' \
+    "Usage: bash run_collect_and_georeference.sh [collector options] -- [curator options]" \
+    "" \
+    "Runs herbarium_specimen_collector first, then passes its output directory to llm_georeference_curator." \
+    "" \
+    "Collector help:" \
+    "  bash herbarium_specimen_collector/run_collect_specimens.sh --help" \
+    "" \
+    "Curator help:" \
+    "  bash llm_georeference_curator/run_llm_georeference_curator.sh --help"
+  exit 0
+fi
+
 COLLECT_ARGS=()
 CURATOR_ARGS=()
 TARGET="collector"

@@ -49,6 +49,7 @@ echo "Running georeference curator offline tests..."
 echo "Checking CLI entry points..."
 bash "${COLLECTOR_DIR}/run_collect_specimens.sh" --help >/dev/null
 bash "${CURATOR_DIR}/run_llm_georeference_curator.sh" --help >/dev/null
+bash "${ROOT_DIR}/run_collect_and_georeference.sh" --help >/dev/null
 
 if command -v rg >/dev/null 2>&1; then
   if rg -n \
