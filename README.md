@@ -1,6 +1,6 @@
 # VASCULUM
 
-Version: `v0.1.7`
+Version: `v0.1.8`
 
 Repository: <https://github.com/yoneoka-katsuhiro/VASCULUM>
 
@@ -27,7 +27,7 @@ Voucher Archive Search and Curation for Unified Large-scale Use of Metadata
 
 ## Setup
 
-For normal use, download the release asset `VASCULUM-v0.1.7.zip` from GitHub
+For normal use, download the release asset `VASCULUM-v0.1.8.zip` from GitHub
 Releases. It expands to a clean `VASCULUM/` directory.
 
 ```bash

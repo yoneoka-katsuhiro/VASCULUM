@@ -33,6 +33,8 @@ class RunReport:
     records: list[SpecimenRecord] = field(default_factory=list)
     sources: dict[str, SourceReport] = field(default_factory=dict)
     errors: list[str] = field(default_factory=list)
+    images_downloaded: int = 0
+    images_in_folder: int = 0
 
     @property
     def partial_failure(self) -> bool:
@@ -105,6 +107,7 @@ def write_summary(path: Path, report: RunReport) -> None:
     image_link_count = sum(1 for record in report.records if record.image_url)
     type_count = sum(1 for record in report.records if record.type_status)
     merged_count = max(0, report.records_found - len(report.records))
+    unreferenced_images = max(0, report.images_in_folder - report.images_downloaded)
 
     lines = [
         f"VASCULUM {report.version}",
@@ -117,17 +120,32 @@ def write_summary(path: Path, report: RunReport) -> None:
         f"Selected sources: {len(report.sources)}",
         f"Image resolution: {report.image_resolution}",
         "",
+        "=== Totals ===",
         f"Records found: {report.records_found}",
-        f"Physical specimens after deduplication: {len(report.records)}",
+        f"DwC records (after deduplication): {len(report.records)}",
+        f"Images downloaded (present in output/images): {report.images_downloaded}",
+        f"Errors: {len(report.errors)}",
+        "",
         f"Duplicate portal records merged: {merged_count}",
         f"Duplicate gatherings grouped: {duplicate_gathering_count(report.records)}",
         f"Records with coordinates: {coordinate_count}",
         f"Records linked to images: {image_link_count}",
         f"Type specimens: {type_count}",
-        f"Images downloaded: {image_counts.get('downloaded', 0)}",
-        f"Images already present: {image_counts.get('already_downloaded', 0)}",
+        f"Images newly downloaded this run: {image_counts.get('downloaded', 0)}",
+        f"Images already present (reused): {image_counts.get('already_downloaded', 0)}",
         f"Images failed: {image_counts.get('rejected_or_failed', 0)}",
         f"Images skipped: {image_counts.get('skipped_by_option', 0)}",
+        f"JPEG files in output/images: {report.images_in_folder}",
+        f"Unreferenced JPEGs still in output/images: {unreferenced_images}",
+    ]
+    if unreferenced_images > 0:
+        lines.append(
+            "  (These are not referenced by the current DwC. They were kept "
+            "because --keep-unreferenced-images was set or a previous run left "
+            "them; a run without that option prunes them so the folder count "
+            "equals 'Images downloaded'.)"
+        )
+    lines += [
         "",
         "Source results:",
         "SOURCE\tSTATUS\tRECORDS\tIMAGES\tRETRIES\tMESSAGE",

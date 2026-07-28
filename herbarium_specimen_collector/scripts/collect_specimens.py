@@ -70,6 +70,15 @@ def parse_args() -> argparse.Namespace:
         help="Validate arguments, dependencies, and configuration without network access.",
     )
     parser.add_argument(
+        "--keep-unreferenced-images",
+        action="store_true",
+        help=(
+            "Do not delete JPEGs in output/images that the current DwC no longer "
+            "references (e.g. images from earlier runs). By default these are "
+            "pruned so the folder count equals the reported image count."
+        ),
+    )
+    parser.add_argument(
         "--gbif-occurrence-mode",
         choices=("specimens", "observations", "specimens-and-observations", "all-images"),
         default=None,
@@ -116,6 +125,7 @@ def main() -> int:
             output_dir=args.output,
             gbif_occurrence_mode=args.gbif_occurrence_mode,
             gbif_coordinate_filter=args.gbif_coordinate_filter,
+            keep_unreferenced_images=args.keep_unreferenced_images,
         )
     except (KeyboardInterrupt, EOFError):
         print("\nInterrupted.", file=sys.stderr)
@@ -136,6 +146,20 @@ def main() -> int:
     print(f"DwC TSV: {report.output_dir / 'dwc.tsv'}")
     print(f"Images: {report.output_dir / 'images'}")
     print(f"Summary: {report.output_dir / 'summary.txt'}")
+    print(
+        "Totals: "
+        f"{report.records_found:,} records found | "
+        f"{len(report.records):,} DwC records | "
+        f"{report.images_downloaded:,} images downloaded | "
+        f"{len(report.errors):,} errors"
+    )
+    unreferenced = max(0, report.images_in_folder - report.images_downloaded)
+    if unreferenced > 0:
+        print(
+            f"Note: {unreferenced:,} JPEG(s) in output/images are not referenced "
+            "by the current DwC (kept via --keep-unreferenced-images or from an "
+            "earlier run)."
+        )
     if report.partial_failure:
         print(
             f"Completed with {len(report.errors)} error(s); see summary.txt.",

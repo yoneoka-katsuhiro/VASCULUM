@@ -10,7 +10,12 @@ from pathlib import Path
 from typing import Callable
 
 from .http_client import PoliteHttpClient
-from .images import download_images, gbif_image_cache_urls, prune_unreferenced_images
+from .images import (
+    count_referenced_images,
+    download_images,
+    gbif_image_cache_urls,
+    prune_unreferenced_images,
+)
 from .models import SpecimenRecord
 from .outputs import RunReport, SourceReport, write_dwc_exports, write_summary
 from .progress import TerminalProgress
@@ -243,7 +248,7 @@ def collect_source_records(
 
 def collector_version(project_dir: Path) -> str:
     version_file = project_dir / "VERSION.txt"
-    return version_file.read_text(encoding="utf-8").strip() if version_file.exists() else "v0.1.7"
+    return version_file.read_text(encoding="utf-8").strip() if version_file.exists() else "v0.1.8"
 
 
 def image_download_settings(settings: dict, profile_name: str) -> dict:
@@ -278,6 +283,7 @@ def run_pipeline(
     output_dir: Path | None = None,
     gbif_occurrence_mode: str | None = None,
     gbif_coordinate_filter: str | None = None,
+    keep_unreferenced_images: bool = False,
 ) -> RunReport:
     load_env_file(project_dir / ".env")
     settings = read_json(project_dir / "config" / "source_settings.json")
@@ -423,10 +429,29 @@ def run_pipeline(
         for error in progress.errors:
             if error not in report.errors:
                 report.errors.append(error)
-        if not report.errors and not skip_images:
+        # Remove JPEGs that the current DwC no longer references so that the
+        # number of files in output/images equals the reported image count.
+        # This runs even after a partial run (errors present); pass
+        # keep_unreferenced_images to preserve images from earlier runs instead.
+        if not skip_images and not keep_unreferenced_images:
             prune_unreferenced_images(destination, report.records)
         for source, row in progress.rows.items():
             report.sources[source].retries = row.retries
+
+        # Authoritative image counts use physical JPEG files, so duplicate DwC
+        # references cannot inflate the displayed total.
+        images_dir = destination / "images"
+        report.images_in_folder = (
+            sum(1 for _ in images_dir.glob("*.jpg")) if images_dir.exists() else 0
+        )
+        report.images_downloaded = count_referenced_images(
+            destination,
+            report.records,
+        )
+        progress.set_totals(
+            images_downloaded=report.images_downloaded,
+            unreferenced_images=max(0, report.images_in_folder - report.images_downloaded),
+        )
 
         report.finished_at = datetime.now().astimezone()
         write_dwc_exports(destination, report.records, accepted_name)

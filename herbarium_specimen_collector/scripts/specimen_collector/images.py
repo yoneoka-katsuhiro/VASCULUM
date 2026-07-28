@@ -24,13 +24,26 @@ class ImageResult:
     skipped: int = 0
 
 
-def prune_unreferenced_images(output_dir: Path, records: list[SpecimenRecord]) -> int:
-    image_dir = output_dir / "images"
-    referenced = {
+def referenced_image_paths(
+    output_dir: Path,
+    records: list[SpecimenRecord],
+) -> set[Path]:
+    return {
         (output_dir / record.local_image_path).resolve()
         for record in records
         if record.local_image_path
     }
+
+
+def count_referenced_images(output_dir: Path, records: list[SpecimenRecord]) -> int:
+    image_dir = output_dir / "images"
+    referenced = referenced_image_paths(output_dir, records)
+    return sum(1 for path in image_dir.glob("*.jpg") if path.resolve() in referenced)
+
+
+def prune_unreferenced_images(output_dir: Path, records: list[SpecimenRecord]) -> int:
+    image_dir = output_dir / "images"
+    referenced = referenced_image_paths(output_dir, records)
     removed = 0
     for path in image_dir.glob("*.jpg"):
         if path.resolve() not in referenced:

@@ -85,7 +85,7 @@ class PoliteHttpClient:
         self.session.headers.update(
             {
                 "User-Agent": (
-                    "VASCULUM/0.1.2 "
+                    "VASCULUM/0.1.8 "
                     f"(academic research; contact: {contact_email})"
                 ),
                 "Accept-Language": "en,ja;q=0.9,zh;q=0.8",

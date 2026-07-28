@@ -34,6 +34,8 @@ class TerminalProgress:
         self.records_found = 0
         self.physical_specimens = 0
         self.duplicate_gatherings = 0
+        self.images_downloaded = 0
+        self.unreferenced_images = 0
         self.errors: list[str] = []
         self.active_source: str | None = None
         self._terminal_width = terminal_width
@@ -130,6 +132,8 @@ class TerminalProgress:
         records_found: int | None = None,
         physical_specimens: int | None = None,
         duplicate_gatherings: int | None = None,
+        images_downloaded: int | None = None,
+        unreferenced_images: int | None = None,
     ) -> None:
         if records_found is not None:
             self.records_found = records_found
@@ -137,6 +141,10 @@ class TerminalProgress:
             self.physical_specimens = physical_specimens
         if duplicate_gatherings is not None:
             self.duplicate_gatherings = duplicate_gatherings
+        if images_downloaded is not None:
+            self.images_downloaded = images_downloaded
+        if unreferenced_images is not None:
+            self.unreferenced_images = unreferenced_images
         self.render()
 
     def _source_counts(self) -> tuple[int, int]:
@@ -191,10 +199,12 @@ class TerminalProgress:
         )
         total_summary = (
             f"Totals: {self.records_found:,} found | "
-            f"{self.physical_specimens:,} specimens | "
-            f"{self.duplicate_gatherings:,} gatherings | "
+            f"{self.physical_specimens:,} records | "
+            f"{self.images_downloaded:,} images | "
             f"{len(self.errors):,} errors"
         )
+        if self.unreferenced_images > 0:
+            total_summary += f" | {self.unreferenced_images:,} unreferenced"
         lines = [
             self._fit(source_summary, width),
             "",

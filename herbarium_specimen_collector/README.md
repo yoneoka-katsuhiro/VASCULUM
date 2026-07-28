@@ -5,7 +5,7 @@ name, merges duplicate portal records that represent the same physical
 specimen, and downloads linked specimen images at a practical research
 resolution.
 
-Version: `v0.1.7`
+Version: `v0.1.8`
 
 ## Requirements
 
@@ -22,6 +22,23 @@ bash setup_mac.sh
 
 The setup script creates `.venv` and installs the packages listed in
 `requirements.txt`. It does not upgrade or replace the system Python or pip.
+
+## Recommended First Run
+
+Confirm the configuration without touching the network first, then try a small
+metadata-only collection before downloading images:
+
+```bash
+# 1. Validate arguments and configuration only (no network, no files)
+bash run_collect_specimens.sh --dry-run --taxon "Haplopteris mediosora"
+
+# 2. Small trial: a few records, metadata only
+bash run_collect_specimens.sh --skip-images --limit 10 \
+  --taxon "Haplopteris mediosora" \
+  --synonym "Vittaria mediosora"
+```
+
+Once the trial succeeds, drop `--skip-images` and `--limit` for a full run.
 
 ## Run
 
@@ -107,9 +124,12 @@ uses a maximum side length of 2400 pixels and quality 88. The
 quality 84. The low profile is intended to reduce disk use while retaining
 readable specimen-label text when the source image is sufficiently sharp.
 Profile values are in `config/source_settings.json`.
-The `images/` directory is managed by the program. After a fully successful
-run, JPEG files not referenced by the current DwC rows are removed. Files are
-not pruned after a partial or failed run.
+The `images/` directory is managed by the program. JPEG files that the current
+DwC rows no longer reference are removed at the end of every run (including
+partial runs) so that the number of files in `images/` equals the reported
+`Images downloaded` count. Pass `--keep-unreferenced-images` to preserve images
+from earlier runs instead; those extra files are then reported as
+`Unreferenced JPEGs` in `summary.txt` and on the final `Totals` line.
 
 ## Duplicate Handling
 

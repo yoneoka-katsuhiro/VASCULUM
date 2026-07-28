@@ -13,6 +13,7 @@ sys.path.insert(0, str(ROOT / "scripts"))
 
 from specimen_collector.html_utils import collect_image_candidates, collect_links
 from specimen_collector.http_client import format_bytes
+from specimen_collector.images import count_referenced_images, prune_unreferenced_images
 from specimen_collector.models import SpecimenRecord
 from specimen_collector.outputs import write_dwc_exports
 from specimen_collector.pipeline import (
@@ -497,6 +498,27 @@ def main() -> None:
         assert csv_row["catalogNumber"] == "TNSVS255550"
         assert csv_row["otherCatalogNumbers"] == "TNS-VS-255550"
         assert named_record.local_image_path in csv_row["associatedMedia"]
+
+    with tempfile.TemporaryDirectory() as tmpdir:
+        output_dir = Path(tmpdir)
+        image_dir = output_dir / "images"
+        image_dir.mkdir()
+        referenced_image = image_dir / "referenced.jpg"
+        unreferenced_image = image_dir / "unreferenced.jpg"
+        referenced_image.write_bytes(b"referenced")
+        unreferenced_image.write_bytes(b"unreferenced")
+        image_record = SpecimenRecord(local_image_path="images/referenced.jpg")
+        duplicate_reference = SpecimenRecord(local_image_path="images/referenced.jpg")
+        assert (
+            count_referenced_images(
+                output_dir,
+                [image_record, duplicate_reference],
+            )
+            == 1
+        )
+        assert prune_unreferenced_images(output_dir, [image_record]) == 1
+        assert referenced_image.exists()
+        assert not unreferenced_image.exists()
 
     same_image = [
         SpecimenRecord(source="gbif", image_url="https://example.org/specimens/shared.jpg"),
