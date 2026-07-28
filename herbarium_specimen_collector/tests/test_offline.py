@@ -415,6 +415,28 @@ def main() -> None:
         assert progress_lines[0].startswith("Sources: 3 selected")
         assert sum(line.startswith("gbif") for line in progress_lines) == 1
 
+    many_sources = [f"source_{index:02d}" for index in range(24)]
+    compact_terminal = TerminalProgress(
+        many_sources,
+        stream=io.StringIO(),
+        terminal_width=80,
+    )
+    compact_terminal.update_source(
+        "source_11",
+        status="processing",
+        completed=0,
+        total=1,
+        records=42,
+    )
+    compact_lines = compact_terminal._lines()
+    assert len(compact_lines) == 7
+    assert any(line.startswith("source_11") for line in compact_lines)
+    assert any(line.startswith("source_10") for line in compact_lines)
+    assert any(line.startswith("source_12") for line in compact_lines)
+    assert not any(line.startswith("source_00") for line in compact_lines)
+    assert compact_lines[0].startswith("Sources: 24 selected")
+    assert compact_lines[-1].startswith("Elapsed:")
+
     cvh_html = '''
     <a href="/spms/detail.php?id=abc123">record</a>
     <a href="/spms/detail.php?id=def456">record</a>

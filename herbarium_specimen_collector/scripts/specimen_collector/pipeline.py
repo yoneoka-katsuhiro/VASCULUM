@@ -248,7 +248,7 @@ def collect_source_records(
 
 def collector_version(project_dir: Path) -> str:
     version_file = project_dir / "VERSION.txt"
-    return version_file.read_text(encoding="utf-8").strip() if version_file.exists() else "v0.1.8"
+    return version_file.read_text(encoding="utf-8").strip() if version_file.exists() else "v0.1.9"
 
 
 def image_download_settings(settings: dict, profile_name: str) -> dict:

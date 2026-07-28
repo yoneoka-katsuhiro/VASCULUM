@@ -157,11 +157,37 @@ class TerminalProgress:
         )
         return finished, active
 
+    def _visible_sources(self, limit: int = 3) -> list[str]:
+        """Keep the live display near the active source instead of listing all."""
+        sources = list(self.rows)
+        if len(sources) <= limit:
+            return sources
+        active = [
+            index
+            for index, source in enumerate(sources)
+            if self.rows[source].status in {"processing", "images"}
+        ]
+        pending = [
+            index
+            for index, source in enumerate(sources)
+            if self.rows[source].status == "pending"
+        ]
+        if active:
+            focus = active[-1]
+        elif pending:
+            focus = pending[0]
+        else:
+            focus = len(sources) - 1
+        start = max(0, min(focus - 1, len(sources) - limit))
+        return sources[start : start + limit]
+
     def _source_lines(self, width: int) -> list[str]:
         lines: list[str] = []
+        visible_sources = self._visible_sources()
         if width >= 58:
             lines.append("SOURCE         STATUS   PROGRESS        RECORDS IMAGES")
-            for source, row in self.rows.items():
+            for source in visible_sources:
+                row = self.rows[source]
                 status = self._status_label(row.status)
                 lines.append(
                     f"{source[:14]:<14} {status[:8]:<8} "
@@ -170,7 +196,8 @@ class TerminalProgress:
                 )
         elif width >= 40:
             lines.append("SOURCE         STATUS   DONE    RECORDS")
-            for source, row in self.rows.items():
+            for source in visible_sources:
+                row = self.rows[source]
                 status = self._status_label(row.status)
                 done = f"{row.completed}/{row.total or '?'}"
                 lines.append(
@@ -182,7 +209,8 @@ class TerminalProgress:
             lines.append(
                 f"{'SOURCE'[:source_width]:<{source_width}} STATUS   DONE"
             )
-            for source, row in self.rows.items():
+            for source in visible_sources:
+                row = self.rows[source]
                 status = self._status_label(row.status)
                 done = f"{row.completed}/{row.total or '?'}"
                 lines.append(
@@ -207,15 +235,13 @@ class TerminalProgress:
             total_summary += f" | {self.unreferenced_images:,} unreferenced"
         lines = [
             self._fit(source_summary, width),
-            "",
             *self._source_lines(width),
-            "",
             self._fit(f"Task: {self.current_task}", width),
             self._fit(
-                f"Elapsed: {self._elapsed(time.monotonic() - self.started)}",
+                f"Elapsed: {self._elapsed(time.monotonic() - self.started)} | "
+                f"{total_summary}",
                 width,
             ),
-            self._fit(total_summary, width),
         ]
         return lines
 

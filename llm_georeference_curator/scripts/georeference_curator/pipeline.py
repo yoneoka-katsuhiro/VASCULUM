@@ -50,7 +50,7 @@ from .scoring import SelectionOptions, original_coordinate_status, select_result
 
 def curator_version(project_dir: Path) -> str:
     version_file = project_dir / "VERSION.txt"
-    return version_file.read_text(encoding="utf-8").strip() if version_file.exists() else "v0.1.8"
+    return version_file.read_text(encoding="utf-8").strip() if version_file.exists() else "v0.1.9"
 
 
 def load_env_file(path: Path) -> None:

@@ -1,6 +1,6 @@
 # LLM Georeference Curator
 
-Version: `v0.1.8`
+Version: `v0.1.9`
 
 `llm_georeference_curator` performs LLM-assisted georeferencing for
 `herbarium_specimen_collector` outputs. It reads collector DwC exports and

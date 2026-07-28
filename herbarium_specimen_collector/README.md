@@ -5,7 +5,7 @@ name, merges duplicate portal records that represent the same physical
 specimen, and downloads linked specimen images at a practical research
 resolution.
 
-Version: `v0.1.8`
+Version: `v0.1.9`
 
 ## Requirements
 
@@ -106,9 +106,9 @@ Use `--output PATH` to choose another output directory.
 
 ## Reusing Outputs From Earlier Releases
 
-Collector outputs created with recent releases, including v0.1.7, can be reused
-with v0.1.8. A reusable taxon directory should contain the DwC table and its
-image folder:
+Collector outputs created with recent releases, including v0.1.7 and v0.1.8,
+can be reused with v0.1.9. A reusable taxon directory should contain the DwC
+table and its image folder:
 
 ```text
 VASCULUM/
@@ -135,9 +135,9 @@ JPEGs with the expected names are inspected first. Valid images are reported as
 files, files below the configured minimum size, or files with unexpected names
 need to be downloaded again.
 
-By default, v0.1.8 removes JPEGs in `images/` that are not referenced by the
-current DwC rows at the end of a run. Use `--keep-unreferenced-images` when
-you intentionally want to keep extra images from an earlier dataset:
+By default, v0.1.8 and later remove JPEGs in `images/` that are not referenced
+by the current DwC rows at the end of a run. Use `--keep-unreferenced-images`
+when you intentionally want to keep extra images from an earlier dataset:
 
 ```bash
 bash run_collect_specimens.sh \
