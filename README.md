@@ -40,6 +40,15 @@ The setup script prepares an isolated Python environment for each pipeline. The
 release check runs syntax checks, offline tests, CLI smoke tests, and a basic
 secret scan without sending specimen data to external services.
 
+## Reusing Previous Outputs
+
+Collector outputs from recent releases can be reused after updating VASCULUM.
+Place each taxon directory under
+`herbarium_specimen_collector/output/<taxon_name>/`, not at repository root.
+When the collector is rerun on the same output directory, valid existing JPEGs
+are checked and reused instead of being downloaded again. See
+`herbarium_specimen_collector/README.md` for the full migration notes.
+
 ## Current Scope
 
 The collector pipeline searches by scientific name, merges duplicate portal

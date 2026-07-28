@@ -104,6 +104,70 @@ per-source status, retries, and errors.
 
 Use `--output PATH` to choose another output directory.
 
+## Reusing Outputs From Earlier Releases
+
+Collector outputs created with recent releases, including v0.1.7, can be reused
+with v0.1.8. A reusable taxon directory should contain the DwC table and its
+image folder:
+
+```text
+VASCULUM/
+  herbarium_specimen_collector/
+    output/
+      Taxon_name/
+        dwc.csv
+        dwc.tsv
+        summary.txt
+        images/
+```
+
+`VASCULUM/output/` is not the standard collector output location. If an older
+working copy has `output/` directly under `VASCULUM/`, move it before rerunning
+the standard collector commands:
+
+```bash
+mv output herbarium_specimen_collector/output
+```
+
+When the same taxon is collected again into the same output directory, existing
+JPEGs with the expected names are inspected first. Valid images are reported as
+`already_downloaded` and are not fetched again. Only missing files, damaged
+files, files below the configured minimum size, or files with unexpected names
+need to be downloaded again.
+
+By default, v0.1.8 removes JPEGs in `images/` that are not referenced by the
+current DwC rows at the end of a run. Use `--keep-unreferenced-images` when
+you intentionally want to keep extra images from an earlier dataset:
+
+```bash
+bash run_collect_specimens.sh \
+  --taxon "Haplopteris mediosora" \
+  --synonym "Vittaria mediosora" \
+  --keep-unreferenced-images
+```
+
+If you use a custom location, pass the taxon output directory explicitly:
+
+```bash
+bash run_collect_specimens.sh \
+  --taxon "Haplopteris mediosora" \
+  --output /path/to/output/Haplopteris_mediosora
+```
+
+To resume only the georeference curator, do not rerun the collector. Point the
+curator directly to a directory that contains `dwc.csv` or `dwc.tsv` and
+`images/`:
+
+```bash
+cd VASCULUM
+
+bash llm_georeference_curator/run_llm_georeference_curator.sh \
+  --input herbarium_specimen_collector/output/Haplopteris_mediosora \
+  --robust \
+  --habitat "subalpine forest" \
+  --llm-mode on
+```
+
 ## Image Names
 
 Image names share their specimen code with the DwC `catalogNumber` field:
