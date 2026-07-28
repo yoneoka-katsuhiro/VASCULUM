@@ -38,7 +38,10 @@ done
 TMP_OUTPUT="$(mktemp)"
 trap 'rm -f "${TMP_OUTPUT}"' EXIT
 
+set +e
 bash "${COLLECTOR_DIR}/run_collect_specimens.sh" "${COLLECT_ARGS[@]}" | tee "${TMP_OUTPUT}"
+COLLECTOR_STATUS="${PIPESTATUS[0]}"
+set -e
 
 COLLECTOR_OUTPUT="$(
   awk -F 'Output: ' '/^Output: / {print $2; exit}' "${TMP_OUTPUT}"
@@ -46,7 +49,35 @@ COLLECTOR_OUTPUT="$(
 
 if [[ -z "${COLLECTOR_OUTPUT}" ]]; then
   echo "ERROR: collector output directory could not be detected." >&2
-  exit 1
+  exit "${COLLECTOR_STATUS:-1}"
+fi
+
+CURATOR_YES="false"
+for arg in "${CURATOR_ARGS[@]}"; do
+  if [[ "${arg}" == "--yes" ]]; then
+    CURATOR_YES="true"
+    break
+  fi
+done
+
+if [[ "${COLLECTOR_STATUS}" -ne 0 ]]; then
+  echo
+  echo "Collector finished with partial errors, but usable output was created:"
+  echo "  ${COLLECTOR_OUTPUT}"
+  echo "Some records or images may be missing. See summary.txt for details."
+  if [[ "${CURATOR_YES}" == "true" ]]; then
+    echo "Continuing because curator option --yes was supplied."
+  else
+    read -r -p "Continue to LLM georeference curation? [y/n]: " REPLY
+    case "${REPLY}" in
+      y|Y|yes|YES)
+        ;;
+      *)
+        echo "Stopped before LLM georeference curation."
+        exit "${COLLECTOR_STATUS}"
+        ;;
+    esac
+  fi
 fi
 
 exec bash "${CURATOR_DIR}/run_llm_georeference_curator.sh" \

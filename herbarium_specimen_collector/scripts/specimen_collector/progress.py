@@ -78,6 +78,18 @@ class TerminalProgress:
             "validated": "ready",
         }.get(status, status)
 
+    @staticmethod
+    def _status_mark(status: str) -> str:
+        return {
+            "pending": "wait",
+            "processing": "run",
+            "images": "img",
+            "complete": "ok",
+            "partial": "part",
+            "failed": "fail",
+            "validated": "ready",
+        }.get(status, status[:5] or "none")
+
     def _width(self) -> int:
         columns = (
             self._terminal_width
@@ -219,6 +231,25 @@ class TerminalProgress:
                 )
         return [self._fit(line, width) for line in lines]
 
+    def _source_map_lines(self, width: int) -> list[str]:
+        if not self.rows:
+            return []
+        prefix = "Source map: "
+        legend = "Source map: ok=done part=partial fail=failed; suffix i=image count"
+        lines = [self._fit(legend, width)]
+        current = prefix
+        for source, row in self.rows.items():
+            token = f"{source}={self._status_mark(row.status)}:{row.images}i"
+            separator = "" if current == prefix else " "
+            if len(current) + len(separator) + len(token) > width:
+                lines.append(self._fit(current.rstrip(), width))
+                current = "  " + token
+            else:
+                current += separator + token
+        if current.strip():
+            lines.append(self._fit(current.rstrip(), width))
+        return lines
+
     def _lines(self) -> list[str]:
         width = self._width()
         finished, active = self._source_counts()
@@ -235,6 +266,7 @@ class TerminalProgress:
             total_summary += f" | {self.unreferenced_images:,} unreferenced"
         lines = [
             self._fit(source_summary, width),
+            *self._source_map_lines(width),
             *self._source_lines(width),
             self._fit(f"Task: {self.current_task}", width),
             self._fit(

@@ -50,7 +50,7 @@ from .scoring import SelectionOptions, original_coordinate_status, select_result
 
 def curator_version(project_dir: Path) -> str:
     version_file = project_dir / "VERSION.txt"
-    return version_file.read_text(encoding="utf-8").strip() if version_file.exists() else "v0.1.9"
+    return version_file.read_text(encoding="utf-8").strip() if version_file.exists() else "v0.1.10"
 
 
 def load_env_file(path: Path) -> None:
@@ -256,7 +256,17 @@ def process_row(
             outcome.llm_attempted += 1
             outcome.llm_transcription_requests += 1
             image_paths = [image_quality.path]
-            with progress.activity(transcription_message):
+            with progress.activity(
+                transcription_message,
+                stage="Label reading",
+                index=index,
+                total=total_rows,
+                catalog=catalog,
+                model=(
+                    f"{transcription_llm_settings.provider}:"
+                    f"{selected_model_label(transcription_llm_settings)}"
+                ),
+            ):
                 response, rate_retries, rate_waits, cache_hit = create_llm_json_with_backoff(
                     transcription_llm_client,
                     build_transcription_prompt(row, label),
@@ -330,7 +340,14 @@ def process_row(
         try:
             outcome.llm_attempted += 1
             outcome.llm_georeference_requests += 1
-            with progress.activity(llm_progress_message):
+            with progress.activity(
+                llm_progress_message,
+                stage="LLM georeference",
+                index=index,
+                total=total_rows,
+                catalog=catalog,
+                model=f"{llm_settings.provider}:{selected_model_label(llm_settings)}",
+            ):
                 response, rate_retries, rate_waits, cache_hit = create_llm_json_with_backoff(
                     llm_client,
                     build_user_prompt(
@@ -381,7 +398,14 @@ def process_row(
         refinement_message = (
             f"Coordinate verification {index}/{total_rows} {catalog}"
         )
-        with progress.activity(refinement_message):
+        with progress.activity(
+            refinement_message,
+            stage="Coordinate verification",
+            index=index,
+            total=total_rows,
+            catalog=catalog,
+            model="Overpass/Open-Meteo",
+        ):
             refinement = refine_llm_candidates(
                 llm_candidates,
                 label,
@@ -581,6 +605,8 @@ def run_pipeline(
     report.worker_count = worker_count
     if hasattr(progress, "set_parallel"):
         progress.set_parallel(worker_count > 1)
+    if hasattr(progress, "configure_run"):
+        progress.configure_run(total_records=len(rows), worker_count=worker_count)
     if dry_run:
         report.finished_at = datetime.now().astimezone()
         return report
@@ -684,8 +710,13 @@ def run_pipeline(
             )
             outcomes[index] = outcome
             aggregate_outcome(report, outcome)
-            if index % 25 == 0:
-                progress.update(f"Processed {index}/{len(rows)} record(s)")
+            progress.complete_record(
+                index,
+                len(rows),
+                catalog_number(row),
+                outcome.result.decision,
+                outcome.result.verification_status,
+            )
     else:
         with ThreadPoolExecutor(max_workers=worker_count) as executor:
             futures = {
@@ -730,8 +761,13 @@ def run_pipeline(
                     outcomes[index] = outcome
                     aggregate_outcome(report, outcome)
                     completed += 1
-                    if completed % 5 == 0 or completed == len(rows):
-                        progress.update(f"Processed {completed}/{len(rows)} record(s)")
+                    progress.complete_record(
+                        completed,
+                        len(rows),
+                        catalog_number(rows[index - 1]),
+                        outcome.result.decision,
+                        outcome.result.verification_status,
+                    )
 
     for index in range(1, len(rows) + 1):
         outcome = outcomes[index]
@@ -752,4 +788,6 @@ def run_pipeline(
     report.finished_at = datetime.now().astimezone()
     write_summary(destination / "summary.txt", report)
     progress.update(f"Complete - {destination}")
+    if hasattr(progress, "finish_run"):
+        progress.finish_run()
     return report

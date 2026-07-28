@@ -35,7 +35,7 @@ from georeference_curator.llm_cache import LlmResponseCache
 from georeference_curator.models import LabelRead
 from georeference_curator.parallel import RateLimitBackoff, resolve_worker_count
 from georeference_curator.pipeline import process_row, run_pipeline
-from georeference_curator.progress import TerminalProgress
+from georeference_curator.progress import TerminalProgress, progress_bar
 from georeference_curator.scoring import (
     SelectionOptions,
     original_coordinate_status,
@@ -94,6 +94,9 @@ def run_test_pipeline(input_dir: Path, output_dir: Path, curation_mode: str):
 
 
 def main() -> None:
+    assert progress_bar(0, 149) == "[--------------------]"
+    assert progress_bar(13, 149) == "[==------------------]"
+    assert progress_bar(149, 149) == "[====================]"
     assert detect_languages("TAIWAN: Formosa: Mt. Arisan 阿里山") == ["zh", "en/la"]
     assert normalize_provider("codex") == "codex-cli"
     assert normalize_provider("opus") == "opus5"

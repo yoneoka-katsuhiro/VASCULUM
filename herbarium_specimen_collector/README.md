@@ -5,7 +5,7 @@ name, merges duplicate portal records that represent the same physical
 specimen, and downloads linked specimen images at a practical research
 resolution.
 
-Version: `v0.1.9`
+Version: `v0.1.10`
 
 ## Requirements
 
@@ -107,7 +107,7 @@ Use `--output PATH` to choose another output directory.
 ## Reusing Outputs From Earlier Releases
 
 Collector outputs created with recent releases, including v0.1.7 and v0.1.8,
-can be reused with v0.1.9. A reusable taxon directory should contain the DwC
+can be reused with v0.1.10. A reusable taxon directory should contain the DwC
 table and its image folder:
 
 ```text

@@ -334,7 +334,7 @@ def preflight_llm(
             f"Reasoning effort: {settings.reasoning_effort}\n"
             f"Web search: {settings.web_search_mode}\n"
             f"{geospatial_notice}"
-            "Continue? [y/N]: ",
+            "Continue? [y/n]: ",
             end="",
             flush=True,
         )
