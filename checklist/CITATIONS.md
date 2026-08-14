@@ -1,6 +1,6 @@
 # Data Sources
 
-VASCULUM CheckList v0.1.1 uses these public data services:
+VASCULUM CheckList v0.1.2 uses these public data services:
 
 - [GBIF Occurrence API](https://techdocs.gbif.org/en/openapi/v1/occurrence)
 - [Chinese Virtual Herbarium](https://www.cvh.ac.cn/spms/list.php)
