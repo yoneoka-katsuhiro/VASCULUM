@@ -32,10 +32,11 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--taxon",
         default="",
-        help="Major group or taxon name. Major groups: Angiosperms, Gymnosperms, Lycophytes, Ferns, Bryophytes.",
+        help=(
+            "Major group or taxon name, including family, genus, or species. "
+            "Major groups: Angiosperms, Gymnosperms, Lycophytes, Ferns, Bryophytes."
+        ),
     )
-    parser.add_argument("--family", default="", help="Family filter.")
-    parser.add_argument("--genus", default="", help="Genus filter.")
     parser.add_argument("--title", default="", help="Checklist title for output files.")
     parser.add_argument(
         "--sources",
@@ -126,8 +127,6 @@ def main() -> int:
     )
     taxon_filter = TaxonFilter(
         taxon=args.taxon.strip(),
-        family=args.family.strip(),
-        genus=args.genus.strip(),
     )
     try:
         report = run_checklist(

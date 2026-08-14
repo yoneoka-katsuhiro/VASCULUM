@@ -111,18 +111,12 @@ class SearchArea:
 @dataclass(frozen=True)
 class TaxonFilter:
     taxon: str = ""
-    family: str = ""
-    genus: str = ""
     cvh_taxa: tuple[str, ...] = ()
 
     def label(self) -> str:
         parts = []
         if self.taxon:
             parts.append(f"taxon={self.taxon}")
-        if self.family:
-            parts.append(f"family={self.family}")
-        if self.genus:
-            parts.append(f"genus={self.genus}")
         if self.cvh_taxa:
             parts.append(f"cvh_taxa={', '.join(self.cvh_taxa)}")
         return "; ".join(parts) or "Plantae"

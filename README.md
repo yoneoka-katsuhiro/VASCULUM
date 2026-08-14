@@ -1,6 +1,6 @@
 # VASCULUM
 
-Version: `v0.1.11`
+Version: `v0.1.12`
 
 Repository: <https://github.com/yoneoka-katsuhiro/VASCULUM>
 
@@ -28,7 +28,7 @@ Voucher Archive Search and Curation for Unified Large-scale Use of Metadata
 
 ## Setup
 
-For normal use, download the release asset `VASCULUM-v0.1.11.zip` from GitHub
+For normal use, download the release asset `VASCULUM-v0.1.12.zip` from GitHub
 Releases. It expands to a clean `VASCULUM/` directory.
 
 ```bash
@@ -65,43 +65,62 @@ The CheckList pipeline reverse-searches species from a country or
 coordinate-radius condition, selects representative herbarium specimen images,
 and renders a visual checklist PDF with provenance tables for review.
 
-## Combined Workflow
+## SpecimenCollector Workflow
 
-Pipelines can be run independently, or connected with the convenience runner:
+Use `herbarium_specimen_collector/` to retrieve Darwin Core-oriented specimen
+records and linked herbarium specimen images.
 
 ```bash
-bash run_collect_and_georeference.sh \
+cd herbarium_specimen_collector
+
+bash run_collect_specimens.sh --dry-run \
+  --taxon "Haplopteris mediosora"
+
+bash run_collect_specimens.sh --skip-images --limit 10 \
   --taxon "Haplopteris mediosora" \
-  --synonym "Vittaria mediosora" \
-  --image-resolution standard \
-  -- \
-  --prompt-profile xie-modified \
-  --habitat "subalpine forest" \
-  --use-hydrology \
-  --use-dem \
-  --workers auto
+  --synonym "Vittaria mediosora"
 ```
 
-Arguments before `--` are passed to `herbarium_specimen_collector`. Arguments
-after `--` are passed to `llm_georeference_curator`.
+Once the trial succeeds, drop `--skip-images` and `--limit` for a full run.
+The collector writes `dwc.csv`, `dwc.tsv`, `summary.txt`, and linked files
+under `images/`.
 
-The collector writes `dwc.csv`, `dwc.tsv`, and linked files under `images/`.
-The combined runner detects that output directory and passes it directly to the
-curator. The curator reads local image paths from DwC `associatedMedia`, runs
-the selected LLM when coordinates need research, and returns
+See `herbarium_specimen_collector/README.md` for source selection, image
+resolution, duplicate handling, and output reuse.
+
+## Georeference Workflow
+
+Use `llm_georeference_curator/` to review and improve coordinates from an
+existing collector output directory.
+
+```bash
+cd llm_georeference_curator
+
+bash run_llm_georeference_curator.sh \
+  --input ../herbarium_specimen_collector/output/Haplopteris_mediosora \
+  --robust \
+  --habitat "subalpine forest" \
+  --limit 10 \
+  --llm-mode on
+```
+
+The curator reads `dwc.csv` or `dwc.tsv` and local specimen images, then writes
 `modified_dwc.csv`, `modified_dwc.tsv`, `georeference_candidates.tsv`,
 `summary.txt`, and `georeference.log.jsonl`.
 
-Curator defaults are tuned for routine throughput: `codex-cli`, `gpt-5.5`,
-reasoning `high`, adaptive `--workers auto`, and three 600-second stages for
-label reading, coordinate research, and coordinate verification. Detailed
-label coordinates bypass web research; unchanged LLM responses are cached.
-Use `--llm-model gpt-5.6-sol --llm-reasoning-effort xhigh --llm-web-search live`
-for difficult final review cases.
+See `llm_georeference_curator/README.md` for LLM provider setup, habitat
+constraints, caching, parallel processing, and review notes.
+
+The collector and curator can be connected with `run_collect_and_georeference.sh`
+when a single combined command is useful, but the two workflows are usually
+easier to understand and check independently.
 
 ## CheckList Workflow
 
-CheckList can be run independently:
+Use `checklist/` to build a species list from a geographic condition and render
+a visual checklist PDF from herbarium specimen records and images.
+
+First validate the configuration:
 
 ```bash
 cd checklist
@@ -110,18 +129,40 @@ bash run_checklist.sh --dry-run \
   --taxon "Ferns"
 ```
 
-For a full visual checklist PDF, set `CONTACT_EMAIL` in `checklist/.env` and
-run:
+### A. Administrative-Area Search
+
+Use administrative fields such as `--country`, `--state`, or `--prefecture`
+when the target area is a named region:
 
 ```bash
 bash run_checklist.sh \
   --country "Japan" \
-  --taxon "Ferns" \
-  --title "Japan Fern CheckList"
+  --taxon "Aspleniaceae" \
+  --title "Japan Aspleniaceae CheckList"
 ```
 
-See `checklist/README.md` for coordinate-radius searches, GPS/image candidate
-selection notes, output files, and citation guidance.
+### B. Coordinate-Radius Search
+
+Use latitude, longitude, and radius when the target area is a small field site
+or locality. This is the recommended first real run:
+
+```bash
+bash run_checklist.sh \
+  --country "Japan" \
+  --latitude 35.303622 \
+  --longitude 139.606166 \
+  --radius 0.5 \
+  --taxon "Ferns" \
+  --title "Jimmuji Fern CheckList"
+```
+
+Very broad combinations, such as `--taxon "Angiosperms"` with a country-wide
+search, can produce many species and substantially increase retrieval, image
+processing, and LLM evaluation time. For routine work, use `--taxon` with a
+family, genus, species, or small coordinate-radius search.
+
+See `checklist/README.md` for taxon-scope examples, representative image
+selection, output files, and citation guidance.
 
 ## Shared Files
 

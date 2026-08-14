@@ -1,4 +1,4 @@
 """VASCULUM CheckList support code."""
 
-CHECKLIST_VERSION = "v0.1.0"
+CHECKLIST_VERSION = "v0.1.1"
 GENERATED_WITH = "Generated with VASCULUM — CheckList"

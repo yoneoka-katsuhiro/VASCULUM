@@ -230,22 +230,10 @@ def now_iso() -> str:
 
 
 def taxon_candidates(taxon_filter: TaxonFilter) -> tuple[str, ...]:
-    if taxon_filter.genus:
-        return (taxon_filter.genus,)
-    if taxon_filter.family:
-        return (taxon_filter.family,)
     key = clean_text(taxon_filter.taxon).lower()
     if key in MAJOR_GROUP_QUERIES:
         return MAJOR_GROUP_QUERIES[key]
     return (taxon_filter.taxon,) if taxon_filter.taxon else ()
-
-
-def desired_rank(taxon_filter: TaxonFilter) -> str:
-    if taxon_filter.genus:
-        return "GENUS"
-    if taxon_filter.family:
-        return "FAMILY"
-    return ""
 
 
 def cache_or_fetch_json(
@@ -270,13 +258,10 @@ def resolve_taxon_key(
     if not candidates:
         return ResolvedTaxon(message="GBIF kingdomKey=6 (Plantae)")
 
-    rank = desired_rank(taxon_filter)
     errors: list[str] = []
     for candidate in candidates:
         progress(f"resolving GBIF taxon key for {candidate}")
         params: dict[str, object] = {"name": candidate, "kingdom": "Plantae"}
-        if rank:
-            params["rank"] = rank
         cache_path = raw_dir / "taxon_match" / f"{safe_token(candidate)}.json"
         data = cache_or_fetch_json(client, cache_path, GBIF_SPECIES_MATCH, params)
         key = value_to_str(data.get("usageKey"))
