@@ -36,3 +36,7 @@ Methodological reference for LLM-assisted georeferencing:
 
 For research outputs, cite each underlying dataset and institution using the
 information in the DwC export and source record page.
+
+CheckList outputs also include provenance tables for the GBIF, CVH, and
+OpenStreetMap records used to build the visual checklist. See
+`checklist/CITATIONS.md` for the pipeline-specific citation notes.

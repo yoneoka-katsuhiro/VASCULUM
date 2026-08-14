@@ -1,6 +1,6 @@
 # VASCULUM
 
-Version: `v0.1.10`
+Version: `v0.1.11`
 
 Repository: <https://github.com/yoneoka-katsuhiro/VASCULUM>
 
@@ -24,10 +24,11 @@ Voucher Archive Search and Curation for Unified Large-scale Use of Metadata
 | --- | --- |
 | `herbarium_specimen_collector/` | Retrieve and integrate Darwin Core (DwC)-oriented herbarium specimen datasets and associated specimen images from multiple digital archives. |
 | `llm_georeference_curator/` | Perform LLM-assisted georeferencing from collector outputs, specimen-label evidence, and detailed locality strings while preserving reviewable coordinate candidates. |
+| `checklist/` | Build species lists from geographic conditions and generate visual checklist PDFs from herbarium specimen records and images. |
 
 ## Setup
 
-For normal use, download the release asset `VASCULUM-v0.1.10.zip` from GitHub
+For normal use, download the release asset `VASCULUM-v0.1.11.zip` from GitHub
 Releases. It expands to a clean `VASCULUM/` directory.
 
 ```bash
@@ -59,6 +60,10 @@ The LLM-assisted georeference curator reads those collector exports, preserves
 reliable original coordinates, adds reviewable coordinate candidates, excludes
 records with insufficient locality evidence, and writes modified DwC exports
 for downstream analysis.
+
+The CheckList pipeline reverse-searches species from a country or
+coordinate-radius condition, selects representative herbarium specimen images,
+and renders a visual checklist PDF with provenance tables for review.
 
 ## Combined Workflow
 
@@ -93,6 +98,30 @@ label reading, coordinate research, and coordinate verification. Detailed
 label coordinates bypass web research; unchanged LLM responses are cached.
 Use `--llm-model gpt-5.6-sol --llm-reasoning-effort xhigh --llm-web-search live`
 for difficult final review cases.
+
+## CheckList Workflow
+
+CheckList can be run independently:
+
+```bash
+cd checklist
+bash run_checklist.sh --dry-run \
+  --country "Japan" \
+  --taxon "Ferns"
+```
+
+For a full visual checklist PDF, set `CONTACT_EMAIL` in `checklist/.env` and
+run:
+
+```bash
+bash run_checklist.sh \
+  --country "Japan" \
+  --taxon "Ferns" \
+  --title "Japan Fern CheckList"
+```
+
+See `checklist/README.md` for coordinate-radius searches, GPS/image candidate
+selection notes, output files, and citation guidance.
 
 ## Shared Files
 

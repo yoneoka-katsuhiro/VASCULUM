@@ -4,8 +4,10 @@ set -euo pipefail
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 COLLECTOR_DIR="${ROOT_DIR}/herbarium_specimen_collector"
 CURATOR_DIR="${ROOT_DIR}/llm_georeference_curator"
+CHECKLIST_DIR="${ROOT_DIR}/checklist"
 COLLECTOR_PYTHON="${COLLECTOR_DIR}/.venv/bin/python"
 CURATOR_PYTHON="${CURATOR_DIR}/.venv/bin/python"
+CHECKLIST_PYTHON="${CHECKLIST_DIR}/.venv/bin/python"
 
 if [[ ! -x "${COLLECTOR_PYTHON}" ]]; then
   COLLECTOR_PYTHON="$(command -v python3 || true)"
@@ -13,7 +15,10 @@ fi
 if [[ ! -x "${CURATOR_PYTHON}" ]]; then
   CURATOR_PYTHON="$(command -v python3 || true)"
 fi
-if [[ -z "${COLLECTOR_PYTHON}" || -z "${CURATOR_PYTHON}" ]]; then
+if [[ ! -x "${CHECKLIST_PYTHON}" ]]; then
+  CHECKLIST_PYTHON="$(command -v python3 || true)"
+fi
+if [[ -z "${COLLECTOR_PYTHON}" || -z "${CURATOR_PYTHON}" || -z "${CHECKLIST_PYTHON}" ]]; then
   echo "ERROR: python3 was not found." >&2
   exit 1
 fi
@@ -39,6 +44,8 @@ echo "Compiling Python files..."
   "${COLLECTOR_DIR}/scripts" "${COLLECTOR_DIR}/tests"
 "${CURATOR_PYTHON}" -m compileall -q \
   "${CURATOR_DIR}/scripts" "${CURATOR_DIR}/tests"
+"${CHECKLIST_PYTHON}" -m compileall -q \
+  "${CHECKLIST_DIR}/scripts"
 
 echo "Running collector offline tests..."
 "${COLLECTOR_PYTHON}" "${COLLECTOR_DIR}/tests/test_offline.py"
@@ -49,6 +56,7 @@ echo "Running georeference curator offline tests..."
 echo "Checking CLI entry points..."
 bash "${COLLECTOR_DIR}/run_collect_specimens.sh" --help >/dev/null
 bash "${CURATOR_DIR}/run_llm_georeference_curator.sh" --help >/dev/null
+bash "${CHECKLIST_DIR}/run_checklist.sh" --help >/dev/null
 bash "${ROOT_DIR}/run_collect_and_georeference.sh" --help >/dev/null
 
 if command -v rg >/dev/null 2>&1; then

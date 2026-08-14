@@ -11,8 +11,12 @@ echo "Setting up llm_georeference_curator..."
 bash "${ROOT_DIR}/llm_georeference_curator/setup_mac.sh"
 
 echo
+echo "Setting up checklist..."
+bash "${ROOT_DIR}/checklist/setup_mac.sh"
+
+echo
 bash "${ROOT_DIR}/check_release.sh"
 
 echo
 echo "VASCULUM setup complete."
-echo "See README.md for independent and combined workflow examples."
+echo "See README.md for independent, combined, and checklist workflow examples."

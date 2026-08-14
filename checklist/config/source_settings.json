@@ -1,0 +1,34 @@
+{
+  "enabled_sources": [
+    "gbif",
+    "cvh"
+  ],
+  "continue_on_source_error": true,
+  "gbif": {
+    "handler": "gbif",
+    "page_size": 100,
+    "request_delay_seconds": 1.0,
+    "image_delay_seconds": 1.0,
+    "max_pages_per_name": 100,
+    "occurrence_mode": "specimens",
+    "coordinate_filter": "any",
+    "media_policy": "best-per-occurrence"
+  },
+  "cvh": {
+    "handler": "cvh",
+    "request_delay_seconds": 4.0,
+    "image_delay_seconds": 4.0,
+    "page_size": 30,
+    "max_pages_per_name": 50,
+    "search_url": "https://www.cvh.ac.cn/spms/list.php?taxonName={query}&page={page}",
+    "record_link_pattern": "detail\\.php\\?id=[A-Za-z0-9_-]+",
+    "api_url": "https://www.cvh.ac.cn/controller/spms/list.php",
+    "detail_api_url": "https://www.cvh.ac.cn/controller/spms/detail.php",
+    "detail_url": "https://www.cvh.ac.cn/spms/detail.php?id={id}",
+    "image_url": "https://image.cvh.ac.cn/files/l/{institutionCode}/{collectionCode}.jpg",
+    "with_photo_only": true,
+    "verify_tls": false,
+    "image_verify_tls": false,
+    "image_license": "http://creativecommons.org/licenses/by-nc-nd/4.0/"
+  }
+}

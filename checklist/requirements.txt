@@ -1,0 +1,4 @@
+beautifulsoup4==4.13.4
+Pillow==11.3.0
+requests==2.32.4
+urllib3==1.26.20
