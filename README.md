@@ -74,15 +74,15 @@ Scroll horizontally to browse the example pages.
 
 <table>
   <tr>
-    <td align="center"><strong>Cover</strong><br><img src="docs/assets/checklist-gallery/philippines_fern_checklist_cover.png" width="180" alt="Cover page for the southern Philippines fern CheckList"></td>
-    <td align="center"><strong>Search maps</strong><br><img src="docs/assets/checklist-gallery/philippines_fern_checklist_search_maps.png" width="180" alt="Search-area maps for the southern Philippines fern CheckList"></td>
-    <td align="center"><strong>Species counts</strong><br><img src="docs/assets/checklist-gallery/philippines_fern_checklist_species_counts.png" width="180" alt="Taxonomic species counts in the southern Philippines fern CheckList"></td>
-    <td align="center"><strong>Hymenophyllaceae</strong><br><img src="docs/assets/checklist-gallery/philippines_fern_checklist_hymenophyllaceae.png" width="180" alt="Hymenophyllaceae page from the southern Philippines fern CheckList"></td>
-    <td align="center"><strong>Lindsaeaceae</strong><br><img src="docs/assets/checklist-gallery/philippines_fern_checklist_lindsaeaceae.png" width="180" alt="Lindsaeaceae page from the southern Philippines fern CheckList"></td>
-    <td align="center"><strong>Thelypteridaceae</strong><br><img src="docs/assets/checklist-gallery/philippines_fern_checklist_thelypteridaceae.png" width="180" alt="Thelypteridaceae page from the southern Philippines fern CheckList"></td>
-    <td align="center"><strong>Athyriaceae</strong><br><img src="docs/assets/checklist-gallery/philippines_fern_checklist_athyriaceae.png" width="180" alt="Athyriaceae page from the southern Philippines fern CheckList"></td>
-    <td align="center"><strong>Polypodiaceae</strong><br><img src="docs/assets/checklist-gallery/philippines_fern_checklist_polypodiaceae.png" width="180" alt="Polypodiaceae page from the southern Philippines fern CheckList"></td>
-    <td align="center"><strong>Index</strong><br><img src="docs/assets/checklist-gallery/philippines_fern_checklist_index.png" width="180" alt="Scientific-name index from the southern Philippines fern CheckList"></td>
+    <td align="center" valign="top"><strong>Cover</strong><br><img src="docs/assets/checklist-gallery/philippines_fern_checklist_cover.png" width="180" alt="Cover page for the southern Philippines fern CheckList"></td>
+    <td align="center" valign="top"><strong>Search maps</strong><br><img src="docs/assets/checklist-gallery/philippines_fern_checklist_search_maps.png" width="180" alt="Search-area maps for the southern Philippines fern CheckList"></td>
+    <td align="center" valign="top"><strong>Species counts</strong><br><img src="docs/assets/checklist-gallery/philippines_fern_checklist_species_counts.png" width="180" alt="Taxonomic species counts in the southern Philippines fern CheckList"></td>
+    <td align="center" valign="top"><strong>Hymenophyllaceae</strong><br><img src="docs/assets/checklist-gallery/philippines_fern_checklist_hymenophyllaceae.png" width="180" alt="Hymenophyllaceae page from the southern Philippines fern CheckList"></td>
+    <td align="center" valign="top"><strong>Lindsaeaceae</strong><br><img src="docs/assets/checklist-gallery/philippines_fern_checklist_lindsaeaceae.png" width="180" alt="Lindsaeaceae page from the southern Philippines fern CheckList"></td>
+    <td align="center" valign="top"><strong>Thelypteridaceae</strong><br><img src="docs/assets/checklist-gallery/philippines_fern_checklist_thelypteridaceae.png" width="180" alt="Thelypteridaceae page from the southern Philippines fern CheckList"></td>
+    <td align="center" valign="top"><strong>Athyriaceae</strong><br><img src="docs/assets/checklist-gallery/philippines_fern_checklist_athyriaceae.png" width="180" alt="Athyriaceae page from the southern Philippines fern CheckList"></td>
+    <td align="center" valign="top"><strong>Polypodiaceae</strong><br><img src="docs/assets/checklist-gallery/philippines_fern_checklist_polypodiaceae.png" width="180" alt="Polypodiaceae page from the southern Philippines fern CheckList"></td>
+    <td align="center" valign="top"><strong>Index</strong><br><img src="docs/assets/checklist-gallery/philippines_fern_checklist_index.png" width="180" alt="Scientific-name index from the southern Philippines fern CheckList"></td>
   </tr>
 </table>
 
