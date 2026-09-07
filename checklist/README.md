@@ -50,29 +50,6 @@ This scale is better for checking setup and output structure than a broad
 country-wide run. Increase the geographic area or taxonomic scope only after a
 small run finishes as expected.
 
-## Example Gallery
-
-The gallery below shows a larger test output for ferns in the southern
-Philippines. It covered 603 accepted species and completed in 4 h 14 min on a
-household Mac mini. This is a demonstration of the final PDF, not the
-recommended first run.
-
-Scroll horizontally to browse the example pages.
-
-<table>
-  <tr>
-    <td width="240" align="center" valign="top"><a href="../docs/assets/checklist-gallery/philippines_fern_checklist_cover.png"><img src="../docs/assets/checklist-gallery/thumbs/philippines_fern_checklist_cover_thumb.png" width="240" alt="Cover page for the southern Philippines fern CheckList"></a></td>
-    <td width="240" align="center" valign="top"><a href="../docs/assets/checklist-gallery/philippines_fern_checklist_search_maps.png"><img src="../docs/assets/checklist-gallery/thumbs/philippines_fern_checklist_search_maps_thumb.png" width="240" alt="Search-area maps for the southern Philippines fern CheckList"></a></td>
-    <td width="240" align="center" valign="top"><a href="../docs/assets/checklist-gallery/philippines_fern_checklist_species_counts.png"><img src="../docs/assets/checklist-gallery/thumbs/philippines_fern_checklist_species_counts_thumb.png" width="240" alt="Taxonomic species counts in the southern Philippines fern CheckList"></a></td>
-    <td width="240" align="center" valign="top"><a href="../docs/assets/checklist-gallery/philippines_fern_checklist_hymenophyllaceae.png"><img src="../docs/assets/checklist-gallery/thumbs/philippines_fern_checklist_hymenophyllaceae_thumb.png" width="240" alt="Hymenophyllaceae page from the southern Philippines fern CheckList"></a></td>
-    <td width="240" align="center" valign="top"><a href="../docs/assets/checklist-gallery/philippines_fern_checklist_lindsaeaceae.png"><img src="../docs/assets/checklist-gallery/thumbs/philippines_fern_checklist_lindsaeaceae_thumb.png" width="240" alt="Lindsaeaceae page from the southern Philippines fern CheckList"></a></td>
-    <td width="240" align="center" valign="top"><a href="../docs/assets/checklist-gallery/philippines_fern_checklist_thelypteridaceae.png"><img src="../docs/assets/checklist-gallery/thumbs/philippines_fern_checklist_thelypteridaceae_thumb.png" width="240" alt="Thelypteridaceae page from the southern Philippines fern CheckList"></a></td>
-    <td width="240" align="center" valign="top"><a href="../docs/assets/checklist-gallery/philippines_fern_checklist_athyriaceae.png"><img src="../docs/assets/checklist-gallery/thumbs/philippines_fern_checklist_athyriaceae_thumb.png" width="240" alt="Athyriaceae page from the southern Philippines fern CheckList"></a></td>
-    <td width="240" align="center" valign="top"><a href="../docs/assets/checklist-gallery/philippines_fern_checklist_polypodiaceae.png"><img src="../docs/assets/checklist-gallery/thumbs/philippines_fern_checklist_polypodiaceae_thumb.png" width="240" alt="Polypodiaceae page from the southern Philippines fern CheckList"></a></td>
-    <td width="240" align="center" valign="top"><a href="../docs/assets/checklist-gallery/philippines_fern_checklist_index.png"><img src="../docs/assets/checklist-gallery/thumbs/philippines_fern_checklist_index_thumb.png" width="240" alt="Scientific-name index from the southern Philippines fern CheckList"></a></td>
-  </tr>
-</table>
-
 ## Run
 
 Administrative-area search:
