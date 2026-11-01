@@ -7,9 +7,10 @@ CURATOR_DIR="${ROOT_DIR}/llm_georeference_curator"
 
 if [[ "${1:-}" == "-h" || "${1:-}" == "--help" ]]; then
   printf '%s\n' \
-    "Usage: bash run_collect_and_georeference.sh [collector options] -- [curator options]" \
+    "Usage: bash run_collect_and_georeference.sh [--pause-before-curation] [collector options] -- [curator options]" \
     "" \
     "Runs herbarium_specimen_collector first, then passes its output directory to llm_georeference_curator." \
+    "--pause-before-curation waits for you to edit DwC or add personal/ inputs before the curator reads them." \
     "" \
     "Collector help:" \
     "  bash herbarium_specimen_collector/run_collect_specimens.sh --help" \
@@ -22,8 +23,13 @@ fi
 COLLECT_ARGS=()
 CURATOR_ARGS=()
 TARGET="collector"
+PAUSE_BEFORE_CURATION="false"
 
 for arg in "$@"; do
+  if [[ "${arg}" == "--pause-before-curation" ]]; then
+    PAUSE_BEFORE_CURATION="true"
+    continue
+  fi
   if [[ "${arg}" == "--" ]]; then
     TARGET="curator"
     continue
@@ -39,7 +45,7 @@ TMP_OUTPUT="$(mktemp)"
 trap 'rm -f "${TMP_OUTPUT}"' EXIT
 
 set +e
-bash "${COLLECTOR_DIR}/run_collect_specimens.sh" "${COLLECT_ARGS[@]}" | tee "${TMP_OUTPUT}"
+bash "${COLLECTOR_DIR}/run_collect_specimens.sh" ${COLLECT_ARGS[@]+"${COLLECT_ARGS[@]}"} | tee "${TMP_OUTPUT}"
 COLLECTOR_STATUS="${PIPESTATUS[0]}"
 set -e
 
@@ -53,7 +59,7 @@ if [[ -z "${COLLECTOR_OUTPUT}" ]]; then
 fi
 
 CURATOR_YES="false"
-for arg in "${CURATOR_ARGS[@]}"; do
+for arg in ${CURATOR_ARGS[@]+"${CURATOR_ARGS[@]}"}; do
   if [[ "${arg}" == "--yes" ]]; then
     CURATOR_YES="true"
     break
@@ -80,6 +86,20 @@ if [[ "${COLLECTOR_STATUS}" -ne 0 ]]; then
   fi
 fi
 
+if [[ "${PAUSE_BEFORE_CURATION}" == "true" ]]; then
+  echo
+  echo "Ready for manual additions: ${COLLECTOR_OUTPUT}"
+  echo "Add personal/dwc.tsv (or dwc.csv), personal/images/, or edit the main DwC."
+  echo "If main dwc.tsv and dwc.csv differ, pass the edited file with curator --input-dwc."
+  if ! read -r -p "Continue to curation after your edits? [y/n]: " REPLY; then
+    REPLY="n"
+  fi
+  case "${REPLY}" in
+    y|Y|yes|YES) ;;
+    *) echo "Stopped before curation. Collector output and personal additions are preserved."; exit 0 ;;
+  esac
+fi
+
 exec bash "${CURATOR_DIR}/run_llm_georeference_curator.sh" \
   --input "${COLLECTOR_OUTPUT}" \
-  "${CURATOR_ARGS[@]}"
+  ${CURATOR_ARGS[@]+"${CURATOR_ARGS[@]}"}

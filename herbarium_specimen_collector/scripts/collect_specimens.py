@@ -149,7 +149,7 @@ def main() -> int:
     print(
         "Totals: "
         f"{report.records_found:,} records found | "
-        f"{len(report.records):,} DwC records | "
+        f"{report.records_written:,} DwC records | "
         f"{report.images_downloaded:,} images downloaded | "
         f"{len(report.errors):,} errors"
     )

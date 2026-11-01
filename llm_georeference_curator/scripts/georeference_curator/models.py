@@ -9,7 +9,9 @@ from typing import List, Optional
 @dataclass
 class LabelRead:
     catalog_number: str = ""
+    occurrence_id: str = ""
     image_path: str = ""
+    image_paths: List[str] = field(default_factory=list)
     image_width: str = ""
     image_height: str = ""
     image_file_size_bytes: str = ""
@@ -23,12 +25,17 @@ class LabelRead:
     elevation_text: str = ""
     label_source: str = ""
     label_status: str = ""
+    coordinate_uncertainty_meters: str = ""
 
 
 @dataclass
 class CoordinateCandidate:
     catalog_number: str = ""
+    occurrence_id: str = ""
     image_path: str = ""
+    image_paths: str = ""
+    input_type: str = ""
+    input_source: str = ""
     image_width: str = ""
     image_height: str = ""
     image_file_size_bytes: str = ""
@@ -43,11 +50,30 @@ class CoordinateCandidate:
     collector_text: str = ""
     elevation_text: str = ""
     habitat_prior: str = ""
+    habitat_review_status: str = "not_selected"
+    habitat_review_remarks: str = ""
+    habitat_review_sources: str = ""
     candidate_rank: int = 0
     candidate_latitude: str = ""
     candidate_longitude: str = ""
     candidate_geodetic_datum: str = ""
     candidate_uncertainty_meters: str = ""
+    reported_uncertainty_meters: str = ""
+    uncertainty_basis: str = "unknown"
+    uncertainty_components: str = ""
+    source_latitude: str = ""
+    source_longitude: str = ""
+    source_datum: str = ""
+    coordinate_operation: str = ""
+    support_status: str = "unverified"
+    supporting_geometry: str = ""
+    source_checks: str = ""
+    original_latitude: str = ""
+    original_longitude: str = ""
+    original_datum: str = ""
+    route_support: str = ""
+    curation_status: str = "review"
+    curation_reasons: str = ""
     candidate_elevation_meters: str = ""
     candidate_type: str = ""
     modern_place_name: str = ""
@@ -67,7 +93,11 @@ class CoordinateCandidate:
     def column_map(cls):
         return [
             ("catalogNumber", "catalog_number"),
+            ("occurrenceID", "occurrence_id"),
             ("imagePath", "image_path"),
+            ("imagePaths", "image_paths"),
+            ("inputType", "input_type"),
+            ("inputSource", "input_source"),
             ("imageWidth", "image_width"),
             ("imageHeight", "image_height"),
             ("imageFileSizeBytes", "image_file_size_bytes"),
@@ -82,11 +112,30 @@ class CoordinateCandidate:
             ("collectorText", "collector_text"),
             ("elevationText", "elevation_text"),
             ("habitatPrior", "habitat_prior"),
+            ("habitatReviewStatus", "habitat_review_status"),
+            ("habitatReviewRemarks", "habitat_review_remarks"),
+            ("habitatReviewSources", "habitat_review_sources"),
             ("candidateRank", "candidate_rank"),
             ("candidateLatitude", "candidate_latitude"),
             ("candidateLongitude", "candidate_longitude"),
             ("candidateGeodeticDatum", "candidate_geodetic_datum"),
             ("candidateUncertaintyMeters", "candidate_uncertainty_meters"),
+            ("reportedUncertaintyMeters", "reported_uncertainty_meters"),
+            ("uncertaintyBasis", "uncertainty_basis"),
+            ("uncertaintyComponents", "uncertainty_components"),
+            ("sourceLatitude", "source_latitude"),
+            ("sourceLongitude", "source_longitude"),
+            ("sourceGeodeticDatum", "source_datum"),
+            ("coordinateOperation", "coordinate_operation"),
+            ("supportStatus", "support_status"),
+            ("supportingGeometry", "supporting_geometry"),
+            ("sourceChecks", "source_checks"),
+            ("originalDecimalLatitude", "original_latitude"),
+            ("originalDecimalLongitude", "original_longitude"),
+            ("originalGeodeticDatum", "original_datum"),
+            ("routeSupport", "route_support"),
+            ("curationStatus", "curation_status"),
+            ("curationReasons", "curation_reasons"),
             ("candidateElevationMeters", "candidate_elevation_meters"),
             ("candidateType", "candidate_type"),
             ("modernPlaceName", "modern_place_name"),
@@ -125,6 +174,12 @@ class CuratedResult:
     notes: List[str] = field(default_factory=list)
     include_in_dwc: bool = True
     exclusion_reason: str = ""
+    llm_usage: List[dict] = field(default_factory=list)
+    habitat_review: dict = field(default_factory=dict)
+    curation_status: str = "unresolved"
+    original_coordinates: dict = field(default_factory=dict)
+    provenance: dict = field(default_factory=dict)
+    stage_errors: List[dict] = field(default_factory=list)
 
 
 @dataclass
@@ -140,6 +195,12 @@ class RunReport:
     llm_model: str = ""
     llm_reasoning_effort: str = ""
     llm_web_search: str = ""
+    label_model: str = ""
+    label_reasoning_effort: str = ""
+    llm_usage_reported_requests: int = 0
+    llm_input_tokens: int = 0
+    llm_cached_input_tokens: int = 0
+    llm_output_tokens: int = 0
     label_timeout_seconds: int = 600
     georeference_timeout_seconds: int = 600
     verification_timeout_seconds: int = 600
@@ -162,6 +223,7 @@ class RunReport:
     review_required: int = 0
     excluded: int = 0
     excluded_insufficient_locality: int = 0
+    excluded_manual_misidentification: int = 0
     candidate_rows: int = 0
     label_sidecar_rows: int = 0
     gazetteer_rows: int = 0
@@ -169,14 +231,32 @@ class RunReport:
     image_review_records: int = 0
     image_missing_records: int = 0
     llm_attempted: int = 0
+    llm_provider_attempts: int = 0
+    max_llm_calls: int = 0
     llm_candidate_rows: int = 0
     llm_errors: int = 0
     geospatial_refinement_attempted: int = 0
     geospatial_refinement_succeeded: int = 0
     habitat_checks_attempted: int = 0
-    habitat_conflicts_rejected: int = 0
+    habitat_review_warnings: int = 0
+    habitat_review_unknown: int = 0
+    habitat_review_unavailable: int = 0
     geospatial_refinement_warnings: List[str] = field(default_factory=list)
     errors: List[str] = field(default_factory=list)
+    georeference_method: str = "evidence-assisted"
+    max_uncertainty_meters: Optional[float] = None
+    accepted: int = 0
+    review: int = 0
+    failed: int = 0
+    resumed_records: int = 0
+    checkpoint_path: str = ""
+    configuration: dict = field(default_factory=dict)
+    personal_dwc_records: int = 0
+    photo_only_records: int = 0
+    attached_personal_images: int = 0
+    input_files: List[dict] = field(default_factory=list)
+    input_warnings: List[str] = field(default_factory=list)
+    images_exported: int = 0
 
     @property
     def partial_failure(self) -> bool:

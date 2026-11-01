@@ -20,6 +20,10 @@ def parse_args():
     )
     parser.add_argument("--input", required=True, type=Path, help="Collector output directory containing dwc.tsv/dwc.csv and images/.")
     parser.add_argument("--input-dwc", type=Path, help="Explicit DwC CSV/TSV file. Defaults to <input>/dwc.tsv then dwc.csv.")
+    parser.add_argument("--additional-input", type=Path, action="append", default=[], help="Additional personal DwC CSV/TSV or directory with dwc.tsv/dwc.csv and/or images/. Repeat for multiple sources.")
+    parser.add_argument("--include-personal", action=argparse.BooleanOptionalAction, default=True, help="Automatically include <input>/personal/dwc.tsv or dwc.csv and unlinked photographs in personal/images/.")
+    parser.add_argument("--import-unlinked-images", action="store_true", help="Also create records for otherwise unlinked images in the collector images/ directory. Personal images are included by default.")
+    parser.add_argument("--export-images", action="store_true", help="Copy only final included specimen images into output/images/. miss_ specimens are excluded; future reruns keep managed exports synchronized.")
     parser.add_argument("--output", type=Path, help="Output directory. Default: output/<input_name>_georeferenced.")
     parser.add_argument("--label-tsv", type=Path, help="Optional TSV/CSV with label transcriptions keyed by catalogNumber.")
     parser.add_argument("--gazetteer-tsv", type=Path, help="Optional local gazetteer TSV/CSV for locality-string geocoding.")
@@ -31,14 +35,17 @@ def parse_args():
         choices=("standard", "robust"),
         default="standard",
         help=(
-            "standard keeps coarse original coordinates as reviewable final values "
-            "when no better candidate exists. robust records coarse originals only "
-            "as candidates and leaves final DwC coordinates blank unless corroborated."
+            "standard includes review/unresolved records with explicit status. "
+            "robust exports accepted records only; all records remain in the audit outputs."
         ),
     )
     parser.add_argument("--standard", dest="curation_mode", action="store_const", const="standard", help="Alias for --curation-mode standard.")
     parser.add_argument("--robust", dest="curation_mode", action="store_const", const="robust", help="Alias for --curation-mode robust.")
-    parser.add_argument("--original-precision-decimals", type=int, default=4, help="Minimum decimal places required to treat original coordinates as precise.")
+    parser.add_argument("--original-precision-decimals", type=int, default=4, help="Deprecated compatibility option; decimal places never establish coordinate trust.")
+    parser.add_argument("--georeference-method", choices=("evidence-assisted", "xie-baseline"), help="Explicit method; xie-baseline is text-only, one-shot and has no web/image/terrain inference.")
+    parser.add_argument("--max-uncertainty-meters", type=float, help="Optional study-specific maximum accepted horizontal uncertainty, not an accuracy guarantee.")
+    parser.add_argument("--label-coordinate-uncertainty-meters", type=float, help="Explicit measurement allowance added to label rounding uncertainty; document the justification for this policy.")
+    parser.add_argument("--reference-regions-tsv", type=Path, help="Optional country/state bounding regions with source provenance for consistency checks.")
     parser.add_argument("--review-distance-km", type=float, default=5.0, help="Distance at which precise original and candidate coordinates conflict.")
     parser.add_argument(
         "--exclude-insufficient-locality",
@@ -55,7 +62,9 @@ def parse_args():
         help="Default codex-cli uses saved Codex/ChatGPT login through codex exec.",
     )
     parser.add_argument("--llm-model", default="auto", help="Model name or auto. Provider candidates can be set with CODEX_MODEL_CANDIDATES, OPUS_MODEL_CANDIDATES, etc.")
-    parser.add_argument("--llm-reasoning-effort", default="", help="Reasoning effort. Default: high or environment override.")
+    parser.add_argument("--llm-reasoning-effort", default="", help="Coordinate-research reasoning effort. Default: medium or environment override.")
+    parser.add_argument("--label-model", default="", help="Label-reading model. Default: same as --llm-model, or LLM_LABEL_MODEL.")
+    parser.add_argument("--label-reasoning-effort", default="", help="Label-reading effort. Default: medium or LLM_LABEL_REASONING_EFFORT.")
     parser.add_argument(
         "--llm-web-search",
         choices=("live", "cached", "indexed", "disabled"),
@@ -117,6 +126,10 @@ def parse_args():
         ),
     )
     parser.add_argument("--yes", action="store_true", help="Skip interactive confirmation before real LLM and external geospatial service calls.")
+    parser.add_argument("--resume", action=argparse.BooleanOptionalAction, default=True, help="Reuse completed record checkpoints when inputs/code/settings match.")
+    parser.add_argument("--verify-source-urls", action=argparse.BooleanOptionalAction, default=True, help="Retrieve bounded source snapshots; reachability is not factual verification.")
+    parser.add_argument("--refresh-sources", action="store_true", help="Refresh source snapshots and bypass completed-record checkpoints.")
+    parser.add_argument("--max-llm-calls", type=int, default=0, help="Hard run-wide fresh LLM attempt limit, including retries. 0 means no extra limit; not a token cap.")
 
     parser.add_argument("--georeferenced-by", default="VASCULUM llm_georeference_curator", help="Value written to DwC georeferencedBy.")
     parser.add_argument("--prompt-profile", choices=("vasculum-default", "xie", "xie-modified"), default="xie-modified", help="Prompt/protocol profile recorded in georeferenceProtocol.")
@@ -132,13 +145,13 @@ def parse_args():
             "refine route-supported anchors."
         ),
     )
-    parser.add_argument("--use-vegetation-prior", action=argparse.BooleanOptionalAction, default=True, help="Use vegetation/habitat as supporting evidence.")
+    parser.add_argument("--use-vegetation-prior", action=argparse.BooleanOptionalAction, default=True, help="Use vegetation/habitat explicitly recorded for the collecting event as locality evidence.")
     parser.add_argument(
         "--habitat",
         action="append",
         default=[],
         help=(
-            "Taxon habitat constraint; repeat as needed, e.g. "
+            "Taxon habitat for advisory review only; does not move or exclude coordinates. Repeat, e.g. "
             "--habitat 'subalpine forest' --habitat river."
         ),
     )
@@ -219,6 +232,20 @@ def main() -> int:
             label_timeout_seconds=args.label_timeout_seconds,
             georeference_timeout_seconds=args.georeference_timeout_seconds,
             verification_timeout_seconds=args.verification_timeout_seconds,
+            label_model=args.label_model,
+            label_reasoning_effort=args.label_reasoning_effort,
+            georeference_method=args.georeference_method,
+            max_uncertainty_meters=args.max_uncertainty_meters,
+            label_coordinate_uncertainty_meters=args.label_coordinate_uncertainty_meters,
+            reference_regions_tsv=args.reference_regions_tsv,
+            resume=args.resume,
+            verify_source_urls=args.verify_source_urls,
+            refresh_sources=args.refresh_sources,
+            max_llm_calls=args.max_llm_calls,
+            additional_inputs=args.additional_input,
+            include_personal=args.include_personal,
+            import_unlinked_images=args.import_unlinked_images,
+            export_images=args.export_images,
         )
     except (KeyboardInterrupt, EOFError):
         print("\nInterrupted.", file=sys.stderr)
@@ -240,6 +267,10 @@ def main() -> int:
     print(f"Modified DwC TSV: {report.output_dir / 'modified_dwc.tsv'}")
     print(f"Candidates TSV: {report.output_dir / 'georeference_candidates.tsv'}")
     print(f"Summary: {report.output_dir / 'summary.txt'}")
+    if report.images_exported:
+        print(f"Final images: {report.output_dir / 'images'} ({report.images_exported})")
+    elif args.export_images:
+        print("Final images: none (no included local images)")
     if args.debug_log:
         print(f"Log: {report.output_dir / 'georeference.log.jsonl'}")
     if report.partial_failure:

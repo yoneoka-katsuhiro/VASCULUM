@@ -248,7 +248,7 @@ def collect_source_records(
 
 def collector_version(project_dir: Path) -> str:
     version_file = project_dir / "VERSION.txt"
-    return version_file.read_text(encoding="utf-8").strip() if version_file.exists() else "v0.1.10"
+    return version_file.read_text(encoding="utf-8").strip() if version_file.exists() else "unknown"
 
 
 def image_download_settings(settings: dict, profile_name: str) -> dict:
@@ -450,6 +450,7 @@ def run_pipeline(
         )
         progress.set_totals(
             images_downloaded=report.images_downloaded,
+            physical_specimens=report.records_written,
             unreferenced_images=max(0, report.images_in_folder - report.images_downloaded),
         )
 

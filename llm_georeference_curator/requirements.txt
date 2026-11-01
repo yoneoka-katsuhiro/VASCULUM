@@ -1,1 +1,2 @@
-# v0.1.10 uses only the Python standard library.
+# PROJ supplies audited coordinate-reference-system transformations.
+pyproj>=3.6,<4

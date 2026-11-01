@@ -6,7 +6,9 @@ import os
 import re
 import time
 import unicodedata
+from datetime import datetime, timezone
 from dataclasses import dataclass, field, replace
+from pathlib import Path
 from typing import Callable, Dict, List, Optional, Sequence, Tuple
 from urllib.parse import urlencode
 from urllib.request import Request, urlopen
@@ -15,6 +17,9 @@ from .elevation import parse_elevation_meters, round_elevation
 from .geocoding import haversine_km
 from .habitat import HabitatPreference
 from .models import CoordinateCandidate, LabelRead
+from .checkpoints import fingerprint
+from .llm_cache import LlmResponseCache
+from .outputs import atomic_text
 
 
 DEFAULT_OVERPASS_ENDPOINT = "https://overpass-api.de/api/interpreter"
@@ -67,6 +72,39 @@ class GeospatialRefinementSettings:
     timeout_seconds: int = 600
     deadline_monotonic: float = 0.0
     user_agent: str = "VASCULUM-llm-georeference-curator/0.1"
+    snapshot_directory: str = ""
+    refresh_snapshots: bool = False
+    audit_records: list = field(default_factory=list)
+
+
+def geospatial_payload(request, settings, required_key):
+    key = fingerprint({"url": request.full_url, "data": (request.data or b"").decode("utf-8")})
+    cache = LlmResponseCache(Path(settings.snapshot_directory)) if settings.snapshot_directory else None
+    cached = cache.get(key) if cache and not settings.refresh_snapshots else None
+    if cached and isinstance(cached.get("payload", {}).get(required_key), list):
+        settings.audit_records.append(dict(cached["audit"], snapshotReused=True))
+        return cached["payload"]
+    with urlopen(request, timeout=remaining_request_timeout(settings)) as response:
+        raw = response.read(32 * 1024 * 1024 + 1)
+    if len(raw) > 32 * 1024 * 1024:
+        raise ValueError("Geospatial service response exceeded the 32 MiB audit limit")
+    import hashlib
+    digest = hashlib.sha256(raw).hexdigest()
+    payload = json.loads(raw.decode("utf-8"))
+    audit = {"url": request.full_url, "requestBody": (request.data or b"").decode("utf-8"),
+        "retrievedAt": datetime.now(timezone.utc).isoformat(), "sha256": digest}
+    if cache:
+        snapshot = cache.directory / f"{digest}.snapshot"
+        with atomic_text(snapshot) as handle:
+            handle.write(raw.decode("utf-8"))
+        audit["snapshotPath"] = str(snapshot)
+    settings.audit_records.append(audit)
+    if not isinstance(payload, dict) or not isinstance(payload.get(required_key), list) or payload.get("error") or payload.get("remark"):
+        raise ValueError("Geospatial service returned an error, incomplete data or an unexpected response shape")
+    cacheable = required_key != "elevation" or all(isinstance(value, (int, float)) and math.isfinite(value) for value in payload[required_key])
+    if cache and cacheable:
+        cache.put(key, {"payload": payload, "audit": audit})
+    return payload
 
 
 def remaining_request_timeout(settings: GeospatialRefinementSettings) -> float:
@@ -91,8 +129,15 @@ class GeospatialRefinementCache:
 class RefinementOutcome:
     attempted: bool = False
     candidate: Optional[CoordinateCandidate] = None
-    rejected_anchor: bool = False
     warning: str = ""
+
+
+@dataclass(frozen=True)
+class HabitatReview:
+    status: str = "not_requested"
+    remarks: str = ""
+    sources: str = ""
+    attempted: bool = False
 
 
 ContextFetcher = Callable[
@@ -112,7 +157,6 @@ def number_or(value, fallback: float) -> float:
 
 def select_refinement_anchor(
     candidates: Sequence[CoordinateCandidate],
-    validate_environment_only: bool = False,
 ) -> Optional[CoordinateCandidate]:
     eligible = []
     for candidate in candidates:
@@ -125,10 +169,6 @@ def select_refinement_anchor(
             type_priority = 3
         elif candidate.candidate_type == "refined_georeference" and route_evidence:
             type_priority = 2
-        elif validate_environment_only and candidate.candidate_type == "refined_georeference":
-            type_priority = 1
-        elif validate_environment_only and candidate.candidate_type == "place_centroid":
-            type_priority = 0
         else:
             continue
         try:
@@ -162,12 +202,6 @@ def has_route_evidence(candidate: CoordinateCandidate) -> bool:
             flags=re.I,
         )
     )
-
-
-def append_audit_value(existing: str, value: str) -> str:
-    values = [item.strip() for item in str(existing or "").split("|") if item.strip()]
-    values.append(value)
-    return " | ".join(dict.fromkeys(values))
 
 
 def refinement_radius_meters(candidate: CoordinateCandidate) -> int:
@@ -221,8 +255,7 @@ def fetch_osm_geospatial_context(
             "User-Agent": settings.user_agent,
         },
     )
-    with urlopen(request, timeout=remaining_request_timeout(settings)) as response:
-        payload = json.loads(response.read().decode("utf-8"))
+    payload = geospatial_payload(request, settings, "elements")
 
     points = []
     environment = []
@@ -467,8 +500,7 @@ def fetch_open_meteo_elevations(
         f"{settings.elevation_endpoint}?{query}",
         headers={"Accept": "application/json", "User-Agent": settings.user_agent},
     )
-    with urlopen(request, timeout=remaining_request_timeout(settings)) as response:
-        payload = json.loads(response.read().decode("utf-8"))
+    payload = geospatial_payload(request, settings, "elevation")
     raw = payload.get("elevation")
     if not isinstance(raw, list) or len(raw) != len(points):
         raise ValueError("Elevation API returned an unexpected response shape.")
@@ -479,6 +511,21 @@ def fetch_open_meteo_elevations(
         except (TypeError, ValueError):
             values.append(None)
     return values
+
+
+def selected_dem_elevation(candidate, label, settings, cache):
+    if not candidate or not settings.enabled or candidate.candidate_geodetic_datum != "WGS84":
+        return None
+    minimum, _ = parse_elevation_meters(label.elevation_text or label.label_transcription)
+    if minimum is not None:
+        return None
+    key = (round(float(candidate.candidate_latitude), 7), round(float(candidate.candidate_longitude), 7))
+    if key not in cache.elevations:
+        values = fetch_open_meteo_elevations([RoutePoint(*key, way_id=0)], settings)
+        if not values or values[0] is None or not math.isfinite(values[0]):
+            raise ValueError("Selected-point DEM elevation is unavailable")
+        cache.elevations[key] = values[0]
+    return round_elevation(cache.elevations[key], 10)
 
 
 def normalize_name(value: str) -> str:
@@ -663,7 +710,7 @@ def evaluate_habitat_compatibility(
     if not preference.canonical:
         return HabitatEvaluation(
             note=(
-                "custom habitat prior retained for LLM research; no controlled "
+                "custom habitat retained for advisory review; no controlled "
                 "post-processing rule was available"
             )
         )
@@ -748,15 +795,13 @@ def evaluate_habitat_compatibility(
 def target_elevation(
     anchor: CoordinateCandidate, label: LabelRead
 ) -> Optional[float]:
-    direct = number_or(anchor.candidate_elevation_meters, float("nan"))
-    if math.isfinite(direct):
-        return direct
     minimum, maximum = parse_elevation_meters(
         label.elevation_text or label.label_transcription
     )
-    if minimum is None or maximum is None:
-        return None
-    return (minimum + maximum) / 2.0
+    if minimum is not None and maximum is not None:
+        return (minimum + maximum) / 2.0
+    direct = number_or(anchor.candidate_elevation_meters, float("nan"))
+    return direct if math.isfinite(direct) else None
 
 
 def score_route_points(
@@ -765,9 +810,7 @@ def score_route_points(
     points: Sequence[RoutePoint],
     elevations: Sequence[Optional[float]],
     radius_meters: int,
-    habitat_preference: HabitatPreference,
-    environment: Sequence[EnvironmentalFeature],
-) -> Optional[Tuple[RoutePoint, float, float, int, str, str]]:
+) -> Optional[Tuple[RoutePoint, float, float, int, str]]:
     if len(points) != len(elevations) or not points:
         return None
     anchor_latitude = float(anchor.candidate_latitude)
@@ -796,52 +839,25 @@ def score_route_points(
         )
         name_score = name_similarity(point.tags, context)
         class_score = route_class_score(point.tags)
-        habitat = evaluate_habitat_compatibility(
-            habitat_preference,
-            point,
-            elevation,
-            environment,
-        )
-        if habitat.hard_conflict:
-            continue
         if elevation_target is not None:
             tolerance = max(120.0, min(300.0, abs(elevation_target) * 0.08))
             elevation_delta = abs(elevation - elevation_target)
             if elevation_delta > max(500.0, tolerance * 2.5):
                 continue
             elevation_score = math.exp(-elevation_delta / tolerance)
-            if habitat_preference.canonical:
-                point_score = (
-                    0.38 * elevation_score
-                    + 0.18 * distance_score
-                    + 0.10 * name_score
-                    + 0.08 * class_score
-                    + 0.26 * habitat.score
-                )
-            else:
-                point_score = (
-                    0.52 * elevation_score
-                    + 0.25 * distance_score
-                    + 0.13 * name_score
-                    + 0.10 * class_score
-                )
+            point_score = (
+                0.52 * elevation_score
+                + 0.25 * distance_score
+                + 0.13 * name_score
+                + 0.10 * class_score
+            )
         else:
-            if name_score < 0.35 and (
-                not habitat_preference.canonical or habitat.score < 0.65
-            ):
+            if name_score < 0.35:
                 continue
             elevation_delta = float("nan")
-            if habitat_preference.canonical:
-                point_score = (
-                    0.45 * distance_score
-                    + 0.20 * name_score
-                    + 0.10 * class_score
-                    + 0.25 * habitat.score
-                )
-            else:
-                point_score = (
-                    0.55 * distance_score + 0.35 * name_score + 0.10 * class_score
-                )
+            point_score = (
+                0.55 * distance_score + 0.35 * name_score + 0.10 * class_score
+            )
         scored.append(
             (
                 point_score,
@@ -849,7 +865,6 @@ def score_route_points(
                 point,
                 elevation,
                 elevation_delta,
-                habitat.note,
             )
         )
     if not scored:
@@ -862,7 +877,6 @@ def score_route_points(
         selected,
         selected_elevation,
         delta,
-        habitat_note,
     ) = scored[0]
     contenders = [item for item in scored if item[0] >= best_score - 0.05]
     spread = max(
@@ -883,17 +897,8 @@ def score_route_points(
     )
     selected_name_score = name_similarity(selected.tags, context)
     minimum_uncertainty = 250.0 if selected_name_score >= 0.35 else 500.0
-    uncertainty = int(
-        round(
-            max(
-                DEM_RESOLUTION_METERS,
-                min(
-                    anchor_uncertainty,
-                    max(minimum_uncertainty, spread / 2.0),
-                ),
-            )
-        )
-    )
+    displacement = haversine_km(anchor_latitude, anchor_longitude, selected.latitude, selected.longitude) * 1000
+    uncertainty = math.ceil(max(anchor_uncertainty, minimum_uncertainty, spread) + displacement + DEM_RESOLUTION_METERS)
     if math.isfinite(delta):
         elevation_note = (
             f"DEM elevation {selected_elevation:.0f} m differs from the "
@@ -907,7 +912,6 @@ def score_route_points(
         best_score,
         uncertainty,
         elevation_note,
-        habitat_note,
     )
 
 
@@ -918,7 +922,6 @@ def build_refined_candidate(
     point_score: float,
     uncertainty_meters: int,
     elevation_note: str,
-    habitat_note: str,
 ) -> CoordinateCandidate:
     route_name = next(iter(route_names(selected.tags)), "")
     route_kind = selected.tags.get("highway") or selected.tags.get("railway") or "route"
@@ -941,13 +944,10 @@ def build_refined_candidate(
     evidence_layers.extend(
         ("openstreetmap_route_geometry", "copernicus_dem_90m")
     )
-    if habitat_note != "habitat prior not supplied":
-        evidence_layers.extend(("habitat_prior", "openstreetmap_environment_context"))
     evidence = (
         f"Started from the source-backed LLM locality anchor and selected an actual "
         f"OpenStreetMap {route_kind} vertex"
-        f"{f' on {route_name}' if route_name else ''}; {elevation_note}; "
-        f"{habitat_note}."
+        f"{f' on {route_name}' if route_name else ''}; {elevation_note}."
     )
     rounded_elevation = round_elevation(elevation, 10)
     return replace(
@@ -956,6 +956,11 @@ def build_refined_candidate(
         candidate_longitude=f"{selected.longitude:.6f}",
         candidate_geodetic_datum="WGS84",
         candidate_uncertainty_meters=str(uncertainty_meters),
+        reported_uncertainty_meters=anchor.reported_uncertainty_meters or anchor.candidate_uncertainty_meters,
+        uncertainty_basis="route_anchor_propagated",
+        uncertainty_components=json.dumps({"anchorRadiusMeters": anchor.candidate_uncertainty_meters, "radiusIncludesDisplacement": True, "demResolutionMeters": DEM_RESOLUTION_METERS, "historicalRouteUncertainty": "unknown"}),
+        route_support="named_route_in_collection_text",
+        support_status="route_proposal",
         candidate_elevation_meters=str(rounded_elevation),
         candidate_type="route_dem_refinement",
         modern_place_name=route_name or anchor.modern_place_name,
@@ -978,18 +983,13 @@ def refine_llm_candidates(
     candidates: Sequence[CoordinateCandidate],
     label: LabelRead,
     settings: GeospatialRefinementSettings,
-    habitat_preference: Optional[HabitatPreference] = None,
     cache: Optional[GeospatialRefinementCache] = None,
     context_fetcher: ContextFetcher = fetch_osm_geospatial_context,
     elevation_fetcher: ElevationFetcher = fetch_open_meteo_elevations,
 ) -> RefinementOutcome:
     if not settings.enabled:
         return RefinementOutcome()
-    habitat_preference = habitat_preference or HabitatPreference()
-    anchor = select_refinement_anchor(
-        candidates,
-        validate_environment_only=bool(habitat_preference.canonical),
-    )
+    anchor = select_refinement_anchor(candidates)
     if anchor is None:
         return RefinementOutcome()
     outcome = RefinementOutcome(attempted=True)
@@ -1011,62 +1011,15 @@ def refine_llm_candidates(
                 settings,
             )
         context = cache.contexts[context_key]
-        if habitat_preference.canonical:
-            anchor_point = RoutePoint(
-                latitude=anchor_latitude,
-                longitude=anchor_longitude,
-                way_id=0,
-                tags={},
-            )
-            anchor_elevation_key = (
-                round(anchor_latitude, 7),
-                round(anchor_longitude, 7),
-            )
-            if anchor_elevation_key in cache.elevations:
-                anchor_elevation = cache.elevations[anchor_elevation_key]
-            else:
-                anchor_elevations = elevation_fetcher([anchor_point], settings)
-                if not anchor_elevations or anchor_elevations[0] is None:
-                    raise ValueError("DEM elevation was unavailable for the LLM anchor.")
-                anchor_elevation = float(anchor_elevations[0])
-                cache.elevations[anchor_elevation_key] = anchor_elevation
-            anchor_habitat = evaluate_habitat_compatibility(
-                habitat_preference,
-                anchor_point,
-                anchor_elevation,
-                context.environment,
-            )
-            if anchor_habitat.hard_conflict:
-                anchor.candidate_type = "ecological_conflict"
-                anchor.score = "0.00"
-                anchor.evidence_layers = append_audit_value(
-                    anchor.evidence_layers, "habitat_conflict"
-                )
-                anchor.evidence_layers = append_audit_value(
-                    anchor.evidence_layers, "openstreetmap_environment_context"
-                )
-                anchor.evidence = (
-                    f"{anchor.evidence}; rejected by habitat validation: "
-                    f"{anchor_habitat.note}."
-                ).strip("; ")
-                anchor.remarks = (
-                    f"{anchor.remarks} Candidate retained for audit but made "
-                    "ineligible because of a hard ecological contradiction."
-                ).strip()
-                outcome.rejected_anchor = True
-                outcome.warning = (
-                    "LLM candidate rejected by habitat validation: "
-                    f"{anchor_habitat.note}."
-                )
-                return outcome
-
         if not settings.use_routes or not has_route_evidence(anchor):
             return outcome
         sampled = choose_elevation_sample(
             context.routes, anchor_latitude, anchor_longitude
         )
+        collection_text = " ".join((label.locality_text, label.label_transcription))
+        sampled = [point for point in sampled if name_similarity(point.tags, collection_text) >= 0.35]
         if not sampled:
-            outcome.warning = "No mapped trail/road geometry was found near the LLM anchor."
+            outcome.warning = "No nearby mapped route name could be tied to the collection text; no snapping performed."
             return outcome
 
         elevations: List[Optional[float]] = [None] * len(sampled)
@@ -1098,13 +1051,11 @@ def refine_llm_candidates(
             sampled,
             elevations,
             radius_meters,
-            habitat_preference,
-            context.environment,
         )
         if scored is None:
             outcome.warning = (
                 "Mapped routes were found, but none agreed sufficiently with the "
-                "locality, elevation, and habitat evidence."
+                "locality and elevation evidence."
             )
             return outcome
         outcome.candidate = build_refined_candidate(anchor, *scored)
@@ -1112,3 +1063,66 @@ def refine_llm_candidates(
     except Exception as exc:
         outcome.warning = f"Geospatial refinement failed: {exc}"
         return outcome
+
+
+def review_selected_habitat(
+    candidate: Optional[CoordinateCandidate],
+    preference: HabitatPreference,
+    settings: GeospatialRefinementSettings,
+    cache: Optional[GeospatialRefinementCache] = None,
+    context_fetcher: ContextFetcher = fetch_osm_geospatial_context,
+    elevation_fetcher: ElevationFetcher = fetch_open_meteo_elevations,
+) -> HabitatReview:
+    """Review the final point without changing any coordinate-selection inputs."""
+    if not preference.enabled:
+        return HabitatReview()
+    if not candidate or not settings.enabled:
+        return HabitatReview("not_checked", "No selected coordinate or network review disabled.")
+    if not preference.canonical:
+        return HabitatReview("unknown", "Custom habitat has no automated review rule.")
+    datum = re.sub(r"[^A-Z0-9]", "", (candidate.candidate_geodetic_datum or "").upper())
+    if datum not in {"WGS84", "EPSG4326"}:
+        return HabitatReview("unknown", "Habitat review requires confirmed WGS84 coordinates.")
+    cache = cache or GeospatialRefinementCache()
+    try:
+        latitude = float(candidate.candidate_latitude)
+        longitude = float(candidate.candidate_longitude)
+        radius = refinement_radius_meters(candidate)
+        context_key = (round(latitude, 4), round(longitude, 4), radius)
+        if context_key not in cache.contexts:
+            cache.contexts[context_key] = context_fetcher(latitude, longitude, radius, settings)
+        context = cache.contexts[context_key]
+        point = RoutePoint(latitude=latitude, longitude=longitude, way_id=0)
+        elevation_key = (round(latitude, 7), round(longitude, 7))
+        if elevation_key not in cache.elevations:
+            elevations = elevation_fetcher([point], settings)
+            if not elevations or elevations[0] is None or not math.isfinite(float(elevations[0])):
+                raise ValueError("DEM elevation unavailable for habitat review.")
+            cache.elevations[elevation_key] = float(elevations[0])
+        elevation = cache.elevations[elevation_key]
+        assessment = evaluate_habitat_compatibility(preference, point, elevation, context.environment)
+        elevation_conflict = bool(
+            (preference.elevation_floor_meters and elevation < preference.elevation_floor_meters)
+            or (preference.elevation_ceiling_meters and elevation > preference.elevation_ceiling_meters)
+        )
+        expected_distance, _ = nearest_environment_distance(latitude, longitude, preference.expected_classes, context.environment)
+        avoided_distance, _ = nearest_environment_distance(latitude, longitude, preference.avoided_classes, context.environment)
+        mapped_conflict = avoided_distance <= 150 and expected_distance > 250
+        if assessment.hard_conflict or elevation_conflict or mapped_conflict:
+            status = "warning"
+        elif not math.isfinite(expected_distance):
+            status = "unknown"
+        else:
+            status = "no_conflict_detected"
+        return HabitatReview(
+            status=status,
+            remarks=(
+                f"{assessment.note}; species-wide ecology is advisory only; "
+                "current maps may differ from conditions at collection; "
+                "coordinates, score, uncertainty and selection unchanged"
+            ),
+            sources=" | ".join((OPENSTREETMAP_COPYRIGHT, OPEN_METEO_DOCUMENTATION, COPERNICUS_DEM_DOI)),
+            attempted=True,
+        )
+    except Exception as exc:
+        return HabitatReview("unavailable", f"Habitat review unavailable: {exc}; selection unchanged", attempted=True)

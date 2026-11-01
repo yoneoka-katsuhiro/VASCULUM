@@ -13,6 +13,8 @@ RECORD_STAGE_NUMBER = {
     "Label reading": 1,
     "LLM georeference": 2,
     "Coordinate verification": 3,
+    "Source audit": 3,
+    "Habitat review": 3,
 }
 
 
@@ -193,8 +195,10 @@ class TerminalProgress:
         thread = threading.Thread(target=animate, daemon=True)
         if not self.parallel:
             thread.start()
+        succeeded = False
         try:
             yield
+            succeeded = True
         finally:
             stop.set()
             if not self.parallel:
@@ -204,15 +208,15 @@ class TerminalProgress:
                 if self.parallel and activity_id in self._active:
                     activity = self._active.pop(activity_id)
                     print(
-                        self._activity_progress(activity, status="done"),
+                        self._activity_progress(activity, status="done" if succeeded else "failed"),
                         file=stream,
                         flush=True,
                     )
-                    return
-                if dynamic:
+                elif dynamic:
                     stream.write("\r\033[K")
-                print(
-                    self._activity_progress(activity_state, status="done"),
-                    file=stream,
-                    flush=True,
-                )
+                if not self.parallel:
+                    print(
+                        self._activity_progress(activity_state, status="done" if succeeded else "failed"),
+                        file=stream,
+                        flush=True,
+                    )

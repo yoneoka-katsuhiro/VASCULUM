@@ -22,6 +22,11 @@ class ImageResult:
     existing: int = 0
     failed: int = 0
     skipped: int = 0
+    excluded: int = 0
+
+
+def is_miss_image(path: Path) -> bool:
+    return path.name.casefold().startswith("miss_") and path.suffix.lower() in {".jpg", ".jpeg", ".png", ".webp"}
 
 
 def referenced_image_paths(
@@ -38,7 +43,7 @@ def referenced_image_paths(
 def count_referenced_images(output_dir: Path, records: list[SpecimenRecord]) -> int:
     image_dir = output_dir / "images"
     referenced = referenced_image_paths(output_dir, records)
-    return sum(1 for path in image_dir.glob("*.jpg") if path.resolve() in referenced)
+    return sum(1 for path in image_dir.glob("*.jpg") if path.resolve() in referenced and not is_miss_image(path))
 
 
 def prune_unreferenced_images(output_dir: Path, records: list[SpecimenRecord]) -> int:
@@ -46,7 +51,7 @@ def prune_unreferenced_images(output_dir: Path, records: list[SpecimenRecord]) -
     referenced = referenced_image_paths(output_dir, records)
     removed = 0
     for path in image_dir.glob("*.jpg"):
-        if path.resolve() not in referenced:
+        if path.resolve() not in referenced and not is_miss_image(path):
             path.unlink()
             removed += 1
     return removed
@@ -239,6 +244,25 @@ def download_images(
         for record in records
         if record.image_url and record.download_status in {"", "pending"}
     ]
+    destinations = _destinations(output_dir, candidates, accepted_name)
+    marker_names = {}
+    for path in (output_dir / "images").glob("*"):
+        if path.is_file() and is_miss_image(path):
+            name = path.name
+            while name.casefold().startswith("miss_"):
+                name = name[5:]
+            marker_names.setdefault(name.casefold(), []).append(path)
+    eligible = []
+    for record in candidates:
+        markers = marker_names.get(destinations[id(record)].name.casefold(), [])
+        if markers:
+            record.download_status = "excluded_manual_misidentification"
+            record.local_image_path = ""
+            record.notes = append_note(record.notes, "Manual miss_ exclusion: " + " | ".join(path.name for path in markers))
+            result.excluded += 1
+        else:
+            eligible.append(record)
+    candidates = eligible
     if skip_images:
         for record in candidates:
             record.download_status = "skipped_by_option"
@@ -254,7 +278,6 @@ def download_images(
     timeout = float(download_settings.get("image_timeout_seconds", 20))
     retries = int(download_settings.get("image_retry_count", 2))
     backoff = float(download_settings.get("image_retry_backoff_seconds", 2.0))
-    destinations = _destinations(output_dir, candidates, accepted_name)
     totals = Counter(record.source for record in candidates)
     completed: Counter[str] = Counter()
     successful: Counter[str] = Counter()

@@ -5,10 +5,11 @@ import json
 import os
 import threading
 import uuid
+from contextlib import contextmanager
 from pathlib import Path
 
 
-CACHE_FORMAT_VERSION = "llm-response-v1"
+CACHE_FORMAT_VERSION = "llm-response-v2"
 
 
 class LlmResponseCache:
@@ -16,6 +17,17 @@ class LlmResponseCache:
         self.directory = directory
         self.enabled = enabled
         self._lock = threading.Lock()
+        self._request_locks: dict[str, threading.Lock] = {}
+
+    @contextmanager
+    def request_lock(self, key: str):
+        if not self.enabled:
+            yield
+            return
+        with self._lock:
+            request_lock = self._request_locks.setdefault(key, threading.Lock())
+        with request_lock:
+            yield
 
     def key(
         self,
@@ -42,12 +54,14 @@ class LlmResponseCache:
             digest.update(b"\0")
         for path in image_paths or []:
             image_path = Path(path)
-            digest.update(image_path.name.encode("utf-8"))
-            digest.update(b"\0")
+            image_digest = hashlib.sha256()
             if image_path.exists():
                 with image_path.open("rb") as handle:
                     for chunk in iter(lambda: handle.read(1024 * 1024), b""):
-                        digest.update(chunk)
+                        image_digest.update(chunk)
+                digest.update(image_digest.digest())
+            else:
+                digest.update(f"missing:{image_path}".encode("utf-8"))
             digest.update(b"\0")
         return digest.hexdigest()
 

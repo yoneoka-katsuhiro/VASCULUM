@@ -16,7 +16,7 @@ except ModuleNotFoundError:  # pragma: no cover
 
 
 DEFAULT_CODEX_WORKER_CAP = 4
-DOCUMENTED_CODEX_THREAD_CAP_FALLBACK = 8
+DEFAULT_MAX_WORKER_CAP = 8
 MAX_REASONABLE_WORKERS = 16
 
 RATE_LIMIT_PATTERNS = (
@@ -38,14 +38,25 @@ class RateLimitBackoff:
     _lock: threading.Lock = field(default_factory=threading.Lock, init=False)
     _pause_until: float = 0.0
     _failures: int = 0
+    max_calls: int = 0
+    calls: int = 0
 
-    def wait(self) -> None:
+    def reserve_call(self):
+        with self._lock:
+            if self.max_calls and self.calls >= self.max_calls:
+                raise RuntimeError("Configured LLM call budget reached; this record remains retryable.")
+            self.calls += 1
+
+    def wait(self, deadline=None) -> None:
         while True:
             with self._lock:
                 delay = self._pause_until - time.monotonic()
             if delay <= 0:
                 return
-            time.sleep(min(delay, 5.0))
+            remaining = deadline - time.monotonic() if deadline else 5.0
+            if remaining <= 0:
+                raise TimeoutError("LLM stage expired while respecting provider backoff")
+            time.sleep(min(delay, 5.0, remaining))
 
     def note_success(self) -> None:
         with self._lock:
@@ -128,10 +139,10 @@ def resolve_worker_count(
         cap = configured_cap
     elif provider == "codex-cli":
         cap = read_codex_thread_cap(project_dir) or (
-            DOCUMENTED_CODEX_THREAD_CAP_FALLBACK if value == "max" else DEFAULT_CODEX_WORKER_CAP
+            DEFAULT_MAX_WORKER_CAP if value == "max" else DEFAULT_CODEX_WORKER_CAP
         )
     else:
-        cap = DOCUMENTED_CODEX_THREAD_CAP_FALLBACK if value == "max" else DEFAULT_CODEX_WORKER_CAP
+        cap = DEFAULT_MAX_WORKER_CAP if value == "max" else DEFAULT_CODEX_WORKER_CAP
 
     if provider == "codex-cli" and value == "auto":
         heavy_model = bool(re.search(r"sol|5\.6", model_label, flags=re.I))

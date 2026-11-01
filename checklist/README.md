@@ -1,9 +1,18 @@
 # CheckList
 
-CheckList reverse-searches plant species from a geographic condition and
-generates a visual checklist PDF from herbarium specimen records and images.
+**Build regional plant species lists and illustrated voucher-based checklist
+PDFs from occurrence evidence.**
+
+CheckList starts with a country, administrative area, or coordinate-radius
+search, derives an accepted species list from GBIF preserved-specimen records,
+and selects representative herbarium images for a visual guide. It can also
+stop after species discovery and return a CSV-only list without image work.
 
 Version: `v0.1.2`
+
+| Input | Main output | Best suited for |
+| --- | --- | --- |
+| Geographic condition and taxonomic scope | Species CSV/TSV, illustrated PDF, evidence records and provenance summary | Museums, herbaria, local floras, field stations and biodiversity surveys |
 
 ## Requirements
 

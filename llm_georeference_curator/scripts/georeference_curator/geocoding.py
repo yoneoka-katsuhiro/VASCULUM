@@ -32,6 +32,9 @@ class GazetteerEntry:
     elevation_meters: str = ""
     language: str = ""
     source: str = "local_gazetteer"
+    geodetic_datum: str = ""
+    verified: bool = False
+    bounds: str = ""
 
 
 @dataclass
@@ -46,7 +49,8 @@ def parse_decimal(value: str):
     if not text:
         return None
     try:
-        return float(text)
+        number = float(text)
+        return number if math.isfinite(number) else None
     except ValueError:
         return None
 
@@ -56,8 +60,10 @@ def valid_lat_lon(latitude: float, longitude: float) -> bool:
 
 
 def is_precise_label_coordinate(raw: RawCoordinate) -> bool:
-    datum = re.sub(r"[^A-Z0-9]", "", (raw.datum or "WGS84").upper())
-    if datum not in {"", "WGS84", "EPSG4326"}:
+    from .policy import to_wgs84
+    try:
+        to_wgs84(raw.latitude, raw.longitude, raw.datum)
+    except (ValueError, RuntimeError):
         return False
     if raw.precision_kind == "dms_seconds":
         return True
@@ -106,6 +112,9 @@ def detect_datum(text: str) -> str:
         return "WGS84"
     if "TOKYO" in upper and "DATUM" in upper:
         return "Tokyo"
+    epsg = re.search(r"EPSG\s*:?\s*(\d{4,6})", upper)
+    if epsg:
+        return f"EPSG:{epsg.group(1)}"
     return ""
 
 
@@ -115,11 +124,13 @@ def extract_decimal_coordinates(text: str):
         return results
 
     lat_lon_patterns = [
-        r"(?:lat(?:itude)?\.?|N)\s*[:=]?\s*([+-]?\d+(?:\.\d+)?)\D{0,30}(?:lon(?:gitude)?\.?|long\.?|lng\.?|E)\s*[:=]?\s*([+-]?\d+(?:\.\d+)?)",
-        r"(?:lon(?:gitude)?\.?|long\.?|lng\.?|E)\s*[:=]?\s*([+-]?\d+(?:\.\d+)?)\D{0,30}(?:lat(?:itude)?\.?|N)\s*[:=]?\s*([+-]?\d+(?:\.\d+)?)",
+        r"\blat(?:itude)?\.?\s*[:=]?\s*([+-]?\d+(?:\.\d+)?)[,;\s]{1,30}(?:lon(?:gitude)?\.?|long\.?|lng\.?)\s*[:=]?\s*([+-]?\d+(?:\.\d+)?)(?!\d|\.\d|[°º′'])",
+        r"\b(?:lon(?:gitude)?\.?|long\.?|lng\.?)\s*[:=]?\s*([+-]?\d+(?:\.\d+)?)[,;\s]{1,30}lat(?:itude)?\.?\s*[:=]?\s*([+-]?\d+(?:\.\d+)?)(?!\d|\.\d|[°º′'])",
     ]
     for index, pattern in enumerate(lat_lon_patterns):
         for match in re.finditer(pattern, text, flags=re.I):
+            if re.search(r"[°º′'″\"]", match.group(0)):
+                continue
             if index == 0:
                 lat, lon = float(match.group(1)), float(match.group(2))
             else:
@@ -135,16 +146,28 @@ def extract_decimal_coordinates(text: str):
                         lon,
                         source_text,
                         "decimal",
-                        detect_datum(source_text),
+                        detect_datum(text[max(0, match.start() - 30):match.end() + 30]),
                         uncertainty_from_precision(latitude_text, longitude_text),
                         f"decimal_{places}dp",
                     )
                 )
 
+    decimal_prefix_pattern = re.compile(
+        r"(?<![\w.])([NS])[ \t]*[:=]?[ \t]*(\d{1,2}(?:\.\d+)?)[,;\s]+"
+        r"([EW])[ \t]*[:=]?[ \t]*(\d{1,3}(?:\.\d+)?)(?!\d|\.\d|[°º′'])", re.I,
+    )
+    for match in decimal_prefix_pattern.finditer(text):
+        latitude = float(match.group(2)) * (-1 if match.group(1).upper() == "S" else 1)
+        longitude = float(match.group(4)) * (-1 if match.group(3).upper() == "W" else 1)
+        if valid_lat_lon(latitude, longitude):
+            places = min(decimal_places(match.group(2)), decimal_places(match.group(4)))
+            results.append(RawCoordinate(latitude, longitude, match.group(0), "decimal",
+                detect_datum(text[max(0, match.start() - 30):match.end() + 30]),
+                uncertainty_from_precision(match.group(2), match.group(4)), f"decimal_{places}dp"))
     decimal_suffix_pattern = re.compile(
-        r"(\d{1,2}(?:\.\d+)?)\s*°?\s*([NS])"
-        r".{0,40}?"
-        r"(\d{1,3}(?:\.\d+)?)\s*°?\s*([EW])",
+        r"(?<![\w.°º′'″\"])(\d{1,2}(?:\.\d+)?)[ \t]*°?[ \t]*([NS])\b"
+        r"[,;\s]+"
+        r"(\d{1,3}(?:\.\d+)?)[ \t]*°?[ \t]*([EW])\b",
         flags=re.I | re.S,
     )
     for match in decimal_suffix_pattern.finditer(text):
@@ -160,26 +183,29 @@ def extract_decimal_coordinates(text: str):
                     longitude,
                     match.group(0),
                     "decimal",
-                    detect_datum(match.group(0)),
+                    detect_datum(text[max(0, match.start() - 30):match.end() + 30]),
                     uncertainty_from_precision(latitude_text, longitude_text),
                     f"decimal_{places}dp",
                 )
             )
 
     dms_pattern = re.compile(
-        r"([NS])[ \t]*(\d{1,2})"
-        r"(?:[ \t]*[°º][ \t]*(\d{1,2}(?:\.\d+)?)"
-        r"(?:[ \t]*[′'](?:[ \t]*(\d{1,2}(?:\.\d+)?)[ \t]*[″\"]?)?)?)?"
-        r".{0,40}?"
-        r"([EW])[ \t]*(\d{1,3})"
-        r"(?:[ \t]*[°º][ \t]*(\d{1,2}(?:\.\d+)?)"
-        r"(?:[ \t]*[′'](?:[ \t]*(\d{1,2}(?:\.\d+)?)[ \t]*[″\"]?)?)?)?",
+        r"(?<![\w.])([NS])[ \t]*(\d{1,2})[ \t]*[°º]"
+        r"(?:[ \t]*(\d{1,2}(?:\.\d+)?)[ \t]*[′']"
+        r"(?:[ \t]*(\d{1,2}(?:\.\d+)?)[ \t]*[″\"])?)?"
+        r"[,;\s]+"
+        r"([EW])[ \t]*(\d{1,3})[ \t]*[°º]"
+        r"(?:[ \t]*(\d{1,2}(?:\.\d+)?)[ \t]*[′']"
+        r"(?:[ \t]*(\d{1,2}(?:\.\d+)?)[ \t]*[″\"])?)?",
         flags=re.I | re.S,
     )
     for match in dms_pattern.finditer(text):
         source_text = match.group(0)
-        lat = dms_to_decimal(match.group(2), match.group(3), match.group(4), match.group(1))
-        lon = dms_to_decimal(match.group(6), match.group(7), match.group(8), match.group(5))
+        try:
+            lat = dms_to_decimal(match.group(2), match.group(3), match.group(4), match.group(1))
+            lon = dms_to_decimal(match.group(6), match.group(7), match.group(8), match.group(5))
+        except ValueError:
+            continue
         if valid_lat_lon(lat, lon):
             context_start = max(0, match.start() - 20)
             context_end = min(len(text), match.end() + 20)
@@ -207,7 +233,7 @@ def extract_decimal_coordinates(text: str):
             )
 
     dms_suffix_pattern = re.compile(
-        r"(\d{1,2})[ \t]*[°º]"
+        r"(?<![\w.°º′'″\"])(\d{1,2})[ \t]*[°º]"
         r"(?:[ \t]*(\d{1,2}(?:\.\d+)?)[ \t]*[′']"
         r"(?:[ \t]*(\d{1,2}(?:\.\d+)?)[ \t]*[″\"]?)?)?"
         r"[ \t]*([NS])"
@@ -220,8 +246,11 @@ def extract_decimal_coordinates(text: str):
     )
     for match in dms_suffix_pattern.finditer(text):
         source_text = match.group(0)
-        lat = dms_to_decimal(match.group(1), match.group(2), match.group(3), match.group(4))
-        lon = dms_to_decimal(match.group(5), match.group(6), match.group(7), match.group(8))
+        try:
+            lat = dms_to_decimal(match.group(1), match.group(2), match.group(3), match.group(4))
+            lon = dms_to_decimal(match.group(5), match.group(6), match.group(7), match.group(8))
+        except ValueError:
+            continue
         if valid_lat_lon(lat, lon):
             context_start = max(0, match.start() - 20)
             context_end = min(len(text), match.end() + 20)
@@ -259,6 +288,10 @@ def extract_decimal_coordinates(text: str):
 
 
 def dms_to_decimal(degrees, minutes, seconds, hemisphere) -> float:
+    if minutes is not None and not 0 <= float(minutes) < 60:
+        raise ValueError("DMS minutes must be between 0 and 60.")
+    if seconds is not None and not 0 <= float(seconds) < 60:
+        raise ValueError("DMS seconds must be between 0 and 60.")
     value = float(degrees)
     if minutes:
         value += float(minutes) / 60.0
@@ -297,6 +330,9 @@ def read_gazetteer(path):
                     elevation_meters=first_present(row, "elevationMeters", "elevation"),
                     language=first_present(row, "language"),
                     source=first_present(row, "source") or "local_gazetteer",
+                    geodetic_datum=first_present(row, "geodeticDatum"),
+                    verified=first_present(row, "verificationStatus").casefold() in {"verified", "validated"},
+                    bounds=first_present(row, "boundingBox"),
                 )
             )
         return entries
@@ -356,4 +392,5 @@ def haversine_km(lat1: float, lon1: float, lat2: float, lon2: float) -> float:
         math.sin(d_phi / 2) ** 2
         + math.cos(phi1) * math.cos(phi2) * math.sin(d_lambda / 2) ** 2
     )
+    a = max(0.0, min(1.0, a))
     return radius * 2 * math.atan2(math.sqrt(a), math.sqrt(1 - a))

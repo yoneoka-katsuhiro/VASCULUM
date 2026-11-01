@@ -71,6 +71,7 @@ def read_label(row, catalog_number: str, image_path: str, sidecar_rows) -> Label
             or row.get("verbatimElevation", ""),
             label_source="sidecar_tsv",
             label_status="transcribed",
+            coordinate_uncertainty_meters=first_present(sidecar, "labelCoordinateUncertaintyMeters"),
         )
 
     transcription = dwc_label_text(row)

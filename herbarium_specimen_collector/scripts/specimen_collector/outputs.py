@@ -40,6 +40,10 @@ class RunReport:
     def partial_failure(self) -> bool:
         return bool(self.errors)
 
+    @property
+    def records_written(self) -> int:
+        return sum(record.download_status != "excluded_manual_misidentification" for record in self.records)
+
 
 def dwc_row(record: SpecimenRecord, accepted_name: str) -> dict[str, str]:
     code = specimen_code(record)
@@ -87,6 +91,8 @@ def write_dwc(path: Path, records: list[SpecimenRecord], accepted_name: str, del
         writer = csv.DictWriter(handle, fieldnames=fieldnames, delimiter=delimiter)
         writer.writeheader()
         for record in records:
+            if record.download_status == "excluded_manual_misidentification":
+                continue
             writer.writerow(dwc_row(record, accepted_name))
 
 
@@ -99,6 +105,7 @@ def write_summary(path: Path, report: RunReport) -> None:
     finished_at = report.finished_at or datetime.now().astimezone()
     elapsed_seconds = max(0, int((finished_at - report.started_at).total_seconds()))
     image_counts = Counter(record.download_status for record in report.records)
+    manually_excluded = [record for record in report.records if record.download_status == "excluded_manual_misidentification"]
     coordinate_count = sum(
         1
         for record in report.records
@@ -122,7 +129,8 @@ def write_summary(path: Path, report: RunReport) -> None:
         "",
         "=== Totals ===",
         f"Records found: {report.records_found}",
-        f"DwC records (after deduplication): {len(report.records)}",
+        f"DwC records (after deduplication and manual review): {len(report.records) - len(manually_excluded)}",
+        f"Specimens excluded by manual miss_ review: {len(manually_excluded)}",
         f"Images downloaded (present in output/images): {report.images_downloaded}",
         f"Errors: {len(report.errors)}",
         "",
@@ -142,9 +150,12 @@ def write_summary(path: Path, report: RunReport) -> None:
         lines.append(
             "  (These are not referenced by the current DwC. They were kept "
             "because --keep-unreferenced-images was set or a previous run left "
-            "them; a run without that option prunes them so the folder count "
-            "equals 'Images downloaded'.)"
+            "them. miss_ review markers are deliberately preserved; other "
+            "unreferenced JPEGs are pruned unless that option is set.)"
         )
+    if manually_excluded:
+        lines.extend(("", "Manual misidentification exclusions (original marked files preserved):"))
+        lines.extend(f"- {specimen_code(record)} | {record.occurrence_id or record.source_record_url} | {record.notes}" for record in manually_excluded)
     lines += [
         "",
         "Source results:",

@@ -4,7 +4,14 @@ import re
 import math
 
 
-UNIT_PATTERN = r"(?:m(?:eters?|etres?)?|ft\.?|feet|foot)"
+UNIT_PATTERN = r"(?:m(?:eters?|etres?)?\.?|ft\.?|feet|foot)(?![A-Za-z])"
+
+
+def label_meters(value, unit):
+    converted = to_meters(value, unit)
+    if unit.lower().rstrip(".") in {"ft", "feet", "foot"}:
+        return round(converted)
+    return int(converted) if converted.is_integer() else converted
 
 
 def to_meters(value: str, unit: str) -> float:
@@ -35,8 +42,8 @@ def parse_elevation_meters(text: str):
         first_unit = range_match.group(2) or range_match.group(4)
         second_unit = range_match.group(4)
         return (
-            round(to_meters(range_match.group(1), first_unit)),
-            round(to_meters(range_match.group(3), second_unit)),
+            label_meters(range_match.group(1), first_unit),
+            label_meters(range_match.group(3), second_unit),
         )
     match = re.search(
         rf"(?:alt\.?|elev\.?|elevation)?\s*(-?\d+(?:\.\d+)?)\s*({UNIT_PATTERN})",
@@ -44,6 +51,6 @@ def parse_elevation_meters(text: str):
         flags=re.I,
     )
     if match:
-        value = round(to_meters(match.group(1), match.group(2)))
+        value = label_meters(match.group(1), match.group(2))
         return value, value
     return None, None
