@@ -1,10 +1,10 @@
 # VASCULUM
 
-Collect herbarium specimen records and photographs from public databases, give
-each specimen a checked coordinate, and build visual checklists, so that
-occurrence data stay linked to the specimens behind them.
+Collect herbarium specimen records and photographs from public databases and
+build visual checklists, so that occurrence data stay linked to the specimens
+behind them.
 
-Version: `v0.1.17` · [Changelog](CHANGELOG.md) · [How to cite](#citation)
+Version: `v0.1.18` · [Changelog](CHANGELOG.md) · [How to cite](#citation)
 
 *VASCULUM* is the botanist's field collecting case; here it is a virtual one
 (Voucher Archive Search and Curation for Unified Large-scale Use of Metadata).
@@ -14,24 +14,23 @@ Version: `v0.1.17` · [Changelog](CHANGELOG.md) · [How to cite](#citation)
 | Directory | What it does | Main output |
 | --- | --- | --- |
 | [`herbarium_specimen_collector/`](herbarium_specimen_collector/README.md) | Searches GBIF, CVH and 20+ herbarium portals by scientific name, merges duplicates of the same specimen and downloads the specimen photos | `dwc.csv`, `images/` |
-| [`llm_georeference_curator/`](llm_georeference_curator/README.md) | Keeps precise existing coordinates; otherwise reads the collecting label in the photo and assigns a point with an uncertainty radius | `modified_dwc.csv` |
 | [`checklist/`](checklist/README.md) | Lists the species of a country or a circle around a point and renders an illustrated checklist PDF | checklist PDF |
 
-The collector and the curator are usually run one after the other. Between
-them you can look at the photos and exclude misidentified specimens by renaming
-a photo with a `miss_` prefix.
+After collecting, look at the photos and mark misidentified specimens by
+renaming a photo with a `miss_` prefix. The LLM georeference curator of
+earlier versions has been removed (see the [changelog](CHANGELOG.md)); coordinates
+in the DwC exports are those supplied by the portals.
 
 ## Requirements
 
 - macOS (the collector and checklist also run on Linux)
 - Python 3.9 or newer
-- [R](https://cran.r-project.org/), for the curator's summary figure
-- For the curator: a ChatGPT login (Codex CLI, default) or a Claude login
-  (Claude Code CLI). No API key is needed.
+- For the checklist: Codex CLI access, used to pick representative specimen
+  images (see the [checklist README](checklist/README.md))
 
 ## Installation
 
-Download `VASCULUM-v0.1.17.zip` from
+Download `VASCULUM-v0.1.18.zip` from
 [GitHub Releases](https://github.com/yoneoka-katsuhiro/VASCULUM/releases) and unzip it, or clone the repository. Then:
 
 ```bash
@@ -39,8 +38,8 @@ cd VASCULUM
 bash setup_mac.sh
 ```
 
-Setup creates a separate Python environment for each pipeline, installs the R
-packages for the figure and finishes with the offline test suite
+Setup creates a separate Python environment for each pipeline and finishes with
+the offline test suite
 (`Release checks passed: … tests`). Nothing is sent to external services.
 
 ## Quick start
@@ -51,21 +50,11 @@ which is sent to the portals as polite identification):
 ```bash
 cd herbarium_specimen_collector
 bash run_collect_specimens.sh --taxon "Haplopteris mediosora" --synonym "Vittaria mediosora"
-cd ..
 ```
 
-Then georeference them, trying ten records first:
-
-```bash
-bash llm_georeference_curator/run_llm_georeference_curator.sh \
-  --input herbarium_specimen_collector/output/Haplopteris_mediosora \
-  --limit 10
-```
-
-The curator prints one line per specimen (result, confidence, radius, where the
-point came from) and writes `modified_dwc.csv` to
-`llm_georeference_curator/output/Haplopteris_mediosora_georeferenced/`. Drop
-`--limit 10` for the full run. Each pipeline README explains its options.
+This writes `dwc.csv`, `dwc.tsv`, `summary.txt` and `images/` to
+`herbarium_specimen_collector/output/Haplopteris_mediosora/`. Each pipeline
+README explains its options.
 
 ## Checklist example
 
@@ -92,16 +81,12 @@ The portals and services used are listed in [CITATIONS.md](CITATIONS.md). Cite
 the herbaria and datasets behind the records you use, not only this software;
 the DwC exports keep each record's institution, dataset and licence.
 
-## Reproducibility and limits
+## Limits
 
-- Every run writes `summary.txt` (software, model and setting versions) and a
-  JSONL log with prompts, model answers, sources, file hashes and the
-  before/after coordinates of every record.
-- LLM answers and web pages change, so a fresh run may differ from an earlier
-  one; keep the output folder and `.cache/` to make a run auditable.
-- Georeferenced points are adopted by the program, not verified. They are
-  marked `georeferenceVerificationStatus=unverified` for your own checks, and
-  no positional accuracy has been measured against independent ground truth.
+- Records and coordinates are taken as supplied by each portal. Coordinate
+  precision, datum and georeferencing provenance are kept in the DwC columns
+  when the portal provides them, but are not checked or corrected.
+- Portal contents change, so a later run may return different records.
 
 ## Development
 

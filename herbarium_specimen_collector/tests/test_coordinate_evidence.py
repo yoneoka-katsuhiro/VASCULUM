@@ -7,7 +7,6 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "scripts"))
-sys.path.insert(0, str(ROOT.parent / "llm_georeference_curator" / "scripts"))
 
 from specimen_collector.models import SpecimenRecord
 from specimen_collector.outputs import dwc_row
@@ -16,7 +15,7 @@ from specimen_collector.sources import dwc_metadata, gbif_records
 
 
 class CoordinateEvidenceTests(unittest.TestCase):
-    def test_collector_metadata_reaches_curator_trust_checks(self):
+    def test_coordinate_provenance_is_preserved_in_dwc(self):
         metadata = dict(geodeticDatum="WGS84", coordinateUncertaintyInMeters="30",
                         georeferenceProtocol="GPS measurement", georeferencedBy="Field collector",
                         datasetName="Example herbarium", datasetKey="dataset-key",

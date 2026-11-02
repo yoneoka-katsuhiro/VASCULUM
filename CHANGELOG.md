@@ -3,6 +3,19 @@
 User-facing changes by release, following [Keep a Changelog](https://keepachangelog.com/).
 Detailed notes and validation records for each release are in [docs/releases/](docs/releases/).
 
+## [0.1.18] - 2026-11-02
+
+### Removed
+- The LLM georeference curator (`llm_georeference_curator/`) and the combined
+  wrapper `run_collect_and_georeference.sh`. Its coordinate estimates were not
+  reliable enough for research use. Coordinates in the collector's DwC exports
+  are those supplied by the portals, with their datum, uncertainty and
+  georeferencing provenance when available. Use v0.1.17 if you need the curator.
+- R is no longer required.
+
+### Changed
+- `setup_mac.sh` and `check_release.sh` cover the collector and checklist only.
+
 ## [0.1.17] - 2026-11-02
 
 ### Added

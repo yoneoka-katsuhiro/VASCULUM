@@ -3,22 +3,17 @@ set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 COLLECTOR_DIR="${ROOT_DIR}/herbarium_specimen_collector"
-CURATOR_DIR="${ROOT_DIR}/llm_georeference_curator"
 CHECKLIST_DIR="${ROOT_DIR}/checklist"
 COLLECTOR_PYTHON="${COLLECTOR_DIR}/.venv/bin/python"
-CURATOR_PYTHON="${CURATOR_DIR}/.venv/bin/python"
 CHECKLIST_PYTHON="${CHECKLIST_DIR}/.venv/bin/python"
 
 if [[ ! -x "${COLLECTOR_PYTHON}" ]]; then
   COLLECTOR_PYTHON="$(command -v python3 || true)"
 fi
-if [[ ! -x "${CURATOR_PYTHON}" ]]; then
-  CURATOR_PYTHON="$(command -v python3 || true)"
-fi
 if [[ ! -x "${CHECKLIST_PYTHON}" ]]; then
   CHECKLIST_PYTHON="$(command -v python3 || true)"
 fi
-if [[ -z "${COLLECTOR_PYTHON}" || -z "${CURATOR_PYTHON}" || -z "${CHECKLIST_PYTHON}" ]]; then
+if [[ -z "${COLLECTOR_PYTHON}" || -z "${CHECKLIST_PYTHON}" ]]; then
   echo "ERROR: python3 was not found." >&2
   exit 1
 fi
@@ -56,20 +51,14 @@ while IFS= read -r script; do
 done < <(find "${ROOT_DIR}" -path "*/.venv" -prune -o -name "*.sh" -type f -print)
 
 run_check "compile collector" "${COLLECTOR_PYTHON}" -m compileall -q "${COLLECTOR_DIR}/scripts" "${COLLECTOR_DIR}/tests"
-run_check "compile curator" "${CURATOR_PYTHON}" -m compileall -q "${CURATOR_DIR}/scripts" "${CURATOR_DIR}/tests"
 run_check "compile checklist" "${CHECKLIST_PYTHON}" -m compileall -q "${CHECKLIST_DIR}/scripts"
 
 for test_file in "${COLLECTOR_DIR}"/tests/test_*.py; do
   run_check "${test_file#"${ROOT_DIR}/"}" "${COLLECTOR_PYTHON}" "${test_file}"
 done
-for test_file in "${CURATOR_DIR}"/tests/test_*.py; do
-  run_check "${test_file#"${ROOT_DIR}/"}" "${CURATOR_PYTHON}" "${test_file}"
-done
 
 run_check "collector --help" bash "${COLLECTOR_DIR}/run_collect_specimens.sh" --help
-run_check "curator --help" bash "${CURATOR_DIR}/run_llm_georeference_curator.sh" --help
 run_check "checklist --help" bash "${CHECKLIST_DIR}/run_checklist.sh" --help
-run_check "combined wrapper --help" bash "${ROOT_DIR}/run_collect_and_georeference.sh" --help
 
 if command -v rg >/dev/null 2>&1; then
   if rg -n \
