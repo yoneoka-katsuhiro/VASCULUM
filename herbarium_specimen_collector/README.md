@@ -5,27 +5,7 @@ name, merges duplicate portal records that represent the same physical
 specimen, and downloads linked specimen images at a practical research
 resolution.
 
-Version: `v0.1.16`
-
-## Human Review With `miss_`
-
-Inspect downloaded specimen images to check identification labels and the
-material itself. To flag a misidentification before curation, prefix the input
-filename with `miss_` (for example, `P01185529_Taxon.jpg` becomes
-`miss_P01185529_Taxon.jpg`). The georeference curator excludes the linked
-specimen and all its views from final DwC, while keeping an auditable reason.
-
-When rerunning collection in the same output directory, a matching marked
-download filename is not downloaded again and its record is omitted from the
-new collector DwC. Marked images are protected from normal unreferenced-image
-pruning and remain available for checking or undo. Summary counts distinguish
-these human exclusions. Keep the original filename unchanged except for the
-prefix so the download can be recognized. Remove the prefix to undo the marker.
-
-Collector output is the raw review/input area, so it intentionally retains
-marked photographs. For a clean final image set without them, run curator with
-`--export-images`; see its README. This human review workflow is not automated
-taxonomic validation by an LLM.
+Version: `v0.1.17`
 
 ## Requirements
 
@@ -124,10 +104,30 @@ per-source status, retries, and errors.
 
 Use `--output PATH` to choose another output directory.
 
+## Human Review With `miss_`
+
+Inspect downloaded specimen images to check identification labels and the
+material itself. To flag a misidentification before curation, prefix the input
+filename with `miss_` (for example, `P01185529_Taxon.jpg` becomes
+`miss_P01185529_Taxon.jpg`). The georeference curator excludes the linked
+specimen and all its views from final DwC, while keeping an auditable reason.
+
+When rerunning collection in the same output directory, a matching marked
+download filename is not downloaded again and its record is omitted from the
+new collector DwC. Marked images are protected from normal unreferenced-image
+pruning and remain available for checking or undo. Summary counts distinguish
+these human exclusions. Keep the original filename unchanged except for the
+prefix so the download can be recognized. Remove the prefix to undo the marker.
+
+Collector output is the raw review/input area, so it intentionally retains
+marked photographs. For a clean final image set without them, run curator with
+`--export-images`; see its README. This human review workflow is not automated
+taxonomic validation by an LLM.
+
 ## Reusing Outputs From Earlier Releases
 
 Collector outputs created with recent releases, including v0.1.7 and v0.1.8,
-can be reused with v0.1.16. A reusable taxon directory should contain the DwC
+can be reused with v0.1.17. A reusable taxon directory should contain the DwC
 table and its image folder:
 
 ```text
@@ -281,6 +281,6 @@ terms.
 The source code is released under the MIT License. Downloaded data and images
 are not covered by the software license.
 
-The georeference curator retains plausible existing coordinates without LLM work. Otherwise,
-new estimates require a local photograph and readable collecting-label evidence;
-DwC locality text alone is not a fallback.
+Next step: `llm_georeference_curator` keeps precise existing coordinates as
+they are and georeferences the rest from the collecting label in each photo
+(DwC locality text alone is never used). See its README.

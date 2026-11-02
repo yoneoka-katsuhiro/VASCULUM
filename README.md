@@ -1,111 +1,76 @@
 # VASCULUM
 
-Version: `v0.1.16`
+Collect herbarium specimen records and photographs from public databases, give
+each specimen a checked coordinate, and build visual checklists, so that
+occurrence data stay linked to the specimens behind them.
 
-[Release notes](RELEASE_NOTES_v0.1.16.md) describe automatic point-radius adoption,
-confidence, cache compatibility and whole-run interruption fixes.
-See the [validation record](VALIDATION_v0.1.16.md) for checks performed and
-scientific claims that have not been validated.
+Version: `v0.1.17` · [Changelog](CHANGELOG.md) · [How to cite](#citation)
 
-Repository: <https://github.com/yoneoka-katsuhiro/VASCULUM>
-
-VASCULUM is a collection of pipelines for retrieving, curating, and organizing
-digital herbarium specimen records and images.
-
-The name refers to a vasculum, a portable botanical collecting case used to hold
-plant specimens during fieldwork. This repository is intended to function as a
-virtual vasculum for gathering, organizing, and holding digital herbarium
-specimen data from multiple archives.
-
-VASCULUM can also be read as:
-
-```text
-Voucher Archive Search and Curation for Unified Large-scale Use of Metadata
-```
+*VASCULUM* is the botanist's field collecting case; here it is a virtual one
+(Voucher Archive Search and Curation for Unified Large-scale Use of Metadata).
 
 ## Pipelines
 
-| Directory | Purpose |
-| --- | --- |
-| `herbarium_specimen_collector/` | Retrieve and integrate Darwin Core (DwC)-oriented herbarium specimen datasets and associated specimen images from multiple digital archives. |
-| `llm_georeference_curator/` | Adopt plausible existing coordinates or determine the best point-radius estimate from specimen photographs, recording confidence and auditable evidence. |
-| `checklist/` | Build species lists from geographic conditions and generate visual checklist PDFs from herbarium specimen records and images. |
+| Directory | What it does | Main output |
+| --- | --- | --- |
+| [`herbarium_specimen_collector/`](herbarium_specimen_collector/README.md) | Searches GBIF, CVH and 20+ herbarium portals by scientific name, merges duplicates of the same specimen and downloads the specimen photos | `dwc.csv`, `images/` |
+| [`llm_georeference_curator/`](llm_georeference_curator/README.md) | Keeps precise existing coordinates; otherwise reads the collecting label in the photo and assigns a point with an uncertainty radius | `modified_dwc.csv` |
+| [`checklist/`](checklist/README.md) | Lists the species of a country or a circle around a point and renders an illustrated checklist PDF | checklist PDF |
 
-## Setup
+The collector and the curator are usually run one after the other. Between
+them you can look at the photos and exclude misidentified specimens by renaming
+a photo with a `miss_` prefix.
 
-Use the v0.1.16 ZIP distribution archive. It expands to a clean
-`VASCULUM/` directory. Once published, release assets are available from GitHub Releases.
+## Requirements
+
+- macOS (the collector and checklist also run on Linux)
+- Python 3.9 or newer
+- [R](https://cran.r-project.org/), for the curator's summary figure
+- For the curator: a ChatGPT login (Codex CLI, default) or a Claude login
+  (Claude Code CLI). No API key is needed.
+
+## Installation
+
+Download `VASCULUM-v0.1.17.zip` from
+[GitHub Releases](https://github.com/yoneoka-katsuhiro/VASCULUM/releases) and unzip it, or clone the repository. Then:
 
 ```bash
 cd VASCULUM
 bash setup_mac.sh
-bash check_release.sh
 ```
 
-Install [R](https://cran.r-project.org/) before setup. The setup script prepares
-an isolated Python environment for each pipeline and the curator's R plotting packages. The
-release check runs syntax checks, offline tests, CLI smoke tests, and a basic
-secret scan without sending specimen data to external services.
+Setup creates a separate Python environment for each pipeline, installs the R
+packages for the figure and finishes with the offline test suite
+(`Release checks passed: … tests`). Nothing is sent to external services.
 
-## Reusing Previous Outputs
+## Quick start
 
-Collector outputs from recent releases can be reused after updating VASCULUM.
-Place each taxon directory under
-`herbarium_specimen_collector/output/<taxon_name>/`, not at repository root.
-When the collector is rerun on the same output directory, valid existing JPEGs
-are checked and reused instead of being downloaded again. See
-`herbarium_specimen_collector/README.md` for the full migration notes.
+Collect the specimens of one species (the first run asks for a contact email,
+which is sent to the portals as polite identification):
 
-## Current Scope
-
-The collector pipeline searches by scientific name, merges duplicate portal
-records that represent the same physical specimen, downloads linked specimen
-images, and writes DwC-oriented exports.
-
-The LLM-assisted georeference curator reads those collector exports, preserves
-plausible original coordinates or determines a best point-radius estimate.
-The only record states are accepted/excluded and technical failed. Doubt is
-represented by confidence and uncertainty rather than review/unresolved queues.
-All final records are unverified until checked by the user.
-
-### Visual Review Of Specimen Identity
-
-A strength of VASCULUM is that occurrence metadata remains connected to actual
-specimen photographs. Researchers can inspect the material and identification
-labels themselves instead of accepting every downloaded record as correctly
-identified. This supports human taxonomic review before georeferencing or SDM.
-VASCULUM does not claim that an LLM automatically verifies plant identity.
-
-After inspecting an **input photograph**, mark a misidentified specimen by
-adding `miss_` to the beginning of its filename:
-
-```text
-MY0001__front.jpg  ->  miss_MY0001__front.jpg
+```bash
+cd herbarium_specimen_collector
+bash run_collect_specimens.sh --taxon "Haplopteris mediosora" --synonym "Vittaria mediosora"
+cd ..
 ```
 
-The next curator run excludes the entire linked specimen, including its DwC
-row and all photo views, without an LLM call. `miss_` is case-insensitive.
-Input photographs are kept for audit/undo; exclusion reasons and identifiers
-remain in summary, candidate TSV and log. A collector rerun also respects
-marked download filenames instead of silently downloading that specimen again.
+Then georeference them, trying ten records first:
 
-Use curator `--export-images` to build a final `images/` folder containing only
-included specimens alongside the modified DwC. No marked image or photo of a
-marked specimen is copied there. Reruns synchronize previously managed copies,
-including removal of an earlier copy after you mark its input photograph.
-See [manual exclusion instructions](llm_georeference_curator/README.md#personal-specimens-and-identity-checks).
+```bash
+bash llm_georeference_curator/run_llm_georeference_curator.sh \
+  --input herbarium_specimen_collector/output/Haplopteris_mediosora \
+  --limit 10
+```
 
-The CheckList pipeline reverse-searches species from a country or
-coordinate-radius condition, selects representative herbarium specimen images,
-and renders a visual checklist PDF with provenance tables for review.
+The curator prints one line per specimen (result, confidence, radius, where the
+point came from) and writes `modified_dwc.csv` to
+`llm_georeference_curator/output/Haplopteris_mediosora_georeferenced/`. Drop
+`--limit 10` for the full run. Each pipeline README explains its options.
 
-## CheckList Example Gallery
+## Checklist example
 
-Example output from a southern Philippines fern test run. The run covered 603
-accepted species and completed in 4 h 14 min on a household Mac mini.
-
-Scroll horizontally to browse the example pages. Click a card to open the full
-page image.
+A southern Philippines fern checklist (603 species; 4 h 14 min on a Mac mini).
+Scroll sideways and click a page to enlarge it.
 
 <table>
   <tr>
@@ -121,171 +86,40 @@ page image.
   </tr>
 </table>
 
-## SpecimenCollector Workflow
+## Data sources
 
-Use `herbarium_specimen_collector/` to retrieve Darwin Core-oriented specimen
-records and linked herbarium specimen images.
+The portals and services used are listed in [CITATIONS.md](CITATIONS.md). Cite
+the herbaria and datasets behind the records you use, not only this software;
+the DwC exports keep each record's institution, dataset and licence.
 
-```bash
-cd herbarium_specimen_collector
+## Reproducibility and limits
 
-bash run_collect_specimens.sh --dry-run \
-  --taxon "Haplopteris mediosora"
+- Every run writes `summary.txt` (software, model and setting versions) and a
+  JSONL log with prompts, model answers, sources, file hashes and the
+  before/after coordinates of every record.
+- LLM answers and web pages change, so a fresh run may differ from an earlier
+  one; keep the output folder and `.cache/` to make a run auditable.
+- Georeferenced points are adopted by the program, not verified. They are
+  marked `georeferenceVerificationStatus=unverified` for your own checks, and
+  no positional accuracy has been measured against independent ground truth.
 
-bash run_collect_specimens.sh --skip-images --limit 10 \
-  --taxon "Haplopteris mediosora" \
-  --synonym "Vittaria mediosora"
-```
+## Development
 
-Once the trial succeeds, drop `--skip-images` and `--limit` for a full run.
-The collector writes `dwc.csv`, `dwc.tsv`, `summary.txt`, and linked files
-under `images/`.
-
-See `herbarium_specimen_collector/README.md` for source selection, image
-resolution, duplicate handling, and output reuse.
-
-## Georeference Workflow
-
-Use `llm_georeference_curator/` to review and improve coordinates from an
-existing collector output directory.
+Run the offline checks before committing or releasing:
 
 ```bash
-cd llm_georeference_curator
-
-bash run_llm_georeference_curator.sh \
-  --input ../herbarium_specimen_collector/output/Haplopteris_mediosora \
-  --habitat "subalpine forest" \
-  --limit 10 \
-  --llm-mode on
+bash check_release.sh
 ```
 
-The curator reads `dwc.csv` or `dwc.tsv` and local specimen images, then writes
-`modified_dwc.csv`, `modified_dwc.tsv`, `georeference_candidates.tsv`,
-`summary.txt`, `georeference.log.jsonl`, and `georeference_flow.pdf`.
-The ribbon PDF uses one R/ggalluvial renderer, fixed source grays and 50% opacity.
-Install R before running setup; setup prepares the required R packages.
+GitHub Actions runs the same tests on every push. Generated outputs, caches,
+virtual environments and `.env` files are excluded by `.gitignore`.
 
-See `llm_georeference_curator/README.md` for LLM provider setup, habitat
-advisory warnings, caching, parallel processing, and review notes. Species-wide
-habitat expectations flag questionable points after selection; they do not
-move coordinates, rank candidates, or exclude records.
+## Citation
 
-### Include Personal Specimens
+Cite the software with the metadata in [CITATION.cff](CITATION.cff) (GitHub's
+"Cite this repository" button), including the version you used, and cite the
+data sources as described above.
 
-Before starting curation, put your own optional `dwc.tsv`/`dwc.csv` and specimen
-photographs under the collector output's `personal/` directory:
+## License
 
-```text
-herbarium_specimen_collector/output/<run>/personal/dwc.tsv
-herbarium_specimen_collector/output/<run>/personal/images/MY0001__front.jpg
-herbarium_specimen_collector/output/<run>/personal/images/MY0001__label.jpg
-```
-
-These are included automatically. Photo-only groups become personal records;
-DwC-only records are retained when existing coordinates pass plausibility checks.
-New coordinate estimates require a linked local photograph. Both whole images in a
-named group are passed to label reading. External collections can be added
-with repeatable curator `--additional-input PATH`. Personal input provenance
-and image hashes are retained alongside portal-derived records.
-
-Editing the main DwC also works, but choose `--input-dwc PATH` if generated
-TSV and CSV now differ. Prefer a separate personal input because the collector
-can regenerate its main tables. Use wrapper `--pause-before-curation` to wait
-for manual additions between collection and curation. See the
-[personal-input instructions](llm_georeference_curator/README.md#personal-specimens-and-identity-checks)
-for identifiers, image grouping, duplicate checks and examples.
-
-### Research Reproducibility
-
-The georeferencing core is inspired by
-[Xie et al. (2025)](https://doi.org/10.1038/s41477-025-02162-y), while image
-transcription, geographic research and advisory ecological checks are explicit
-VASCULUM extensions. This is not an exact replication of the original experiment.
-There is one input policy: retain plausible original coordinates without LLM
-work; otherwise read the photograph and georeference the finest legible place.
-County/township/village/mountain/river localities remain eligible even if the
-exact collecting site or part of the text is unknown. Unknown datum and
-positional error use explicit policy allowances, not a holding state.
-
-Reproducibility and later auditing are design requirements: preserve the input
-DwC/images, six primary outputs and private response/snapshot caches. Logs
-record before/after coordinates, actual models, complete prompts, timestamps,
-code/input/image hashes, sources and stage errors. Completed-record checkpoints
-allow cached replay. Fresh LLM calls and changing web sources are not guaranteed
-to reproduce identical answers. See the
-[point-radius methodology](llm_georeference_curator/docs/methodology.md).
-
-Six-decimal coordinates do not imply sub-meter accuracy. The study's reported
-error statistic is not an individual 10 km guarantee, and this extension has
-not yet demonstrated improved positional accuracy on an independent benchmark.
-The final DwC always exports accepted records only, without a mode switch;
-LLM-estimated uncertainty is allowed. Accepted means machine-adopted, with
-qualitative confidence, not independently validated. georeferenceVerificationStatus
-is unverified for final user checks. --max-uncertainty-meters is optional and
-has no default upper limit. Reuse the old transcription cache when upgrading;
-Ctrl-C stops all provider processes/workers with exit code 130.
-
-The collector and curator can be connected with `run_collect_and_georeference.sh`
-when a single combined command is useful, but the two workflows are usually
-easier to understand and check independently.
-
-## CheckList Workflow
-
-Use `checklist/` to build a species list from a geographic condition and render
-a visual checklist PDF from herbarium specimen records and images.
-
-First validate the configuration:
-
-```bash
-cd checklist
-bash run_checklist.sh --dry-run \
-  --country "Japan" \
-  --taxon "Ferns"
-```
-
-### A. Administrative-Area Search
-
-Use administrative fields such as `--country`, `--state`, or `--prefecture`
-when the target area is a named region:
-
-```bash
-bash run_checklist.sh \
-  --country "Japan" \
-  --taxon "Aspleniaceae" \
-  --title "Japan Aspleniaceae CheckList"
-```
-
-### B. Coordinate-Radius Search
-
-Use latitude, longitude, and radius when the target area is a small field site
-or locality. This is the recommended first real run:
-
-```bash
-bash run_checklist.sh \
-  --country "Japan" \
-  --latitude 35.303622 \
-  --longitude 139.606166 \
-  --radius 0.5 \
-  --taxon "Ferns" \
-  --title "Jimmuji Fern CheckList"
-```
-
-Very broad combinations, such as `--taxon "Angiosperms"` with a country-wide
-search, can produce many species and substantially increase retrieval, image
-processing, and LLM evaluation time. For routine work, use `--taxon` with a
-family, genus, species, or small coordinate-radius search.
-
-See `checklist/README.md` for taxon-scope examples, representative image
-selection, output files, and citation guidance.
-
-## Shared Files
-
-`LICENSE` applies to the source code in this repository. `CITATIONS.md` lists
-the public data services used by the configured adapters.
-
-## Publication Notes
-
-Local environments, API-key files, generated outputs, caches, macOS metadata,
-and ZIP archives are excluded by `.gitignore`. Run `bash check_release.sh`
-before staging a public release. The setup process does not initialize a Git
-repository or publish any files.
+MIT License; see [LICENSE](LICENSE).

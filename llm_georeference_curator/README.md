@@ -1,177 +1,188 @@
-# llm_georeference_curator v0.1.16
+# llm_georeference_curator
 
-Automatically determine a best point-radius georeference from existing DwC
-coordinates or the finest legible locality on a specimen photograph. The tool
-makes an adoption decision; final scientific validation belongs to the user.
+Gives every herbarium specimen from `herbarium_specimen_collector` a coordinate
+and an uncertainty radius. Precise existing coordinates are kept as they are;
+everything else is georeferenced from the collecting label in the specimen
+photograph.
 
-## Decisions
+Version: `v0.1.17`
 
-- **accepted:** a best coordinate and positive uncertainty radius are determined
-  and written to final DwC. Doubt is expressed as confidence high/medium/low,
-  assumptions and radius, not a holding state.
-- **excluded:** country/admin-1-only label locality; no photograph and no usable
-  coordinate; a miss_ exclusion mark; or an obvious geographic contradiction
-  that cannot be repaired from the label.
-- **failed:** a technical interruption, unavailable required provider, invalid
-  required response, timeout or transformation failure. Failed work is retryable
-  and is not a completed-record checkpoint.
+## How each specimen is decided
 
-There are no review/unresolved record states. A county, township, village,
-mountain, river, pass or forest road is not rejected for being broad. A partial
-reading is usable: unreadable suffixes are not invented and do not prevent a
-best estimate from the legible place. A label stating only country/admin-1 is
-excluded for insufficient locality. A wholly unreadable image has not supplied
-the required reading: it is a retryable reading failure, not an extra exclusion
-category or a hidden review queue. Successful partial transcriptions are cached.
-
-All final records have georeferenceVerificationStatus=unverified. accepted means
-machine-adopted, not independently proven true. The user can update verification
-status after checking every record. confidence is qualitative, not a probability.
-
-## Quick Start
-
-Install [R](https://cran.r-project.org/) before setup. From the VASCULUM root:
-
-```bash
-bash setup_mac.sh
-codex login
-codex login status
-
-bash llm_georeference_curator/run_llm_georeference_curator.sh \
-  --input herbarium_specimen_collector/output/Haplopteris_mediosora \
-  --habitat "subalpine forest"
+```mermaid
+flowchart TD
+    A[Specimen] --> B{Photo marked miss_?}
+    B -- yes --> X1[excluded: misidentification]
+    B -- no --> C{Existing coordinate?}
+    C -- precise --> K[accepted: keep it, no LLM]
+    C -- "coarse or none" --> D{Label photo?}
+    D -- no --> E{Coarse point?}
+    E -- yes --> K2[accepted: keep coarse point, low confidence]
+    E -- no --> X2[excluded: no photo, no coordinate]
+    D -- yes --> F[LLM reads the label]
+    F --> G{Printed coordinates?}
+    G -- yes --> L[accepted: convert them]
+    G -- no --> H{Locality finer than province?}
+    H -- yes --> M[accepted: LLM point + radius]
+    H -- no --> X3[excluded: locality too broad]
 ```
 
-Codex CLI uses the saved account login and does not require an API key. An
-available provider is used in --llm-mode auto; --llm-mode on requires LLM work
-when needed, while off uses existing coordinates/local supplied evidence only.
-The default model selection prefers gpt-6.1-sol with medium reasoning. Label
-reading and geographic research have separate requests and 600-second stage
-limits. --label-model and --llm-model can override the models independently.
---workers auto shares provider backoff; it does not override account limits.
+- **Precise** existing coordinate: documented as GPS, or finer than about 1 km
+  and not reused by other collecting events.
+- **Coarse** existing coordinate: whole arc-minutes or coarser (for example
+  `23.51667, 120.8` = 23°31′, 120°48′), or one point shared by specimens with
+  different collecting dates. These are regional placeholders, so the label is
+  read again. The coarse point is kept only when nothing better is found.
+- A partly illegible label is still used: the finest legible place name
+  (county, township, village, mountain, river, pass, road) gets a best point and
+  a radius that covers the whole named area.
 
-Use --limit 10 for a small run. --max-llm-calls limits fresh provider attempts,
-not tokens. LLM use can consume account allowance or credits; confirmation is
-requested before calls unless --yes is supplied. Other CLI providers require
-an explicitly configured compatible command; see .env.example.
+Every accepted record carries `confidence` (high / medium / low) and
+`georeferenceVerificationStatus=unverified`. Accepted means "adopted by the
+program", not "verified"; you check the final points yourself. Records that
+fail for technical reasons (timeouts, provider errors) are marked `failed` and
+retried on the next run.
 
-## Coordinate Policy
+## Requirements
 
-Plausible existing decimal coordinates are adopted without an LLM call, even
-without a photograph or GPS provenance. Zero placeholders, invalid/swapped
-coordinates, country/state contradictions, indicated institutional locations
-and apparent national-center/capital placeholders are screened first. A unique
-valid latitude/longitude swap can be corrected locally. Current bundled Natural
-Earth references provide conservative checks, not exact historical boundaries.
-Institutional checks use supplied institutional coordinates or explicit source
-flags; they are not a complete global herbarium-location registry.
+- macOS, Python 3.9 or newer, and [R](https://cran.r-project.org/) (for the summary figure)
+- One LLM login, used only for specimens that need a label reading:
+  - **ChatGPT** through Codex CLI (default; bundled with the ChatGPT app), or
+  - **Claude** through Claude Code CLI (`--llm-provider claude`; bundled with the Claude app)
 
-A blank datum is assumed WGS84 with the exact remark
-"datum not stated; assumed WGS84" and a 5000 m datum allowance added to the
-radius. An unrecognized named geographic datum is also explicitly identified
-as an assumption. Missing positional error receives a 1000 m policy allowance,
-in addition to coordinate rounding and datum/transformation allowance. These
-are conservative operational assumptions, not measured error or a universal
-scientific bound. Supplied uncertainty is never reduced below the rounding
-minimum. Original WGS84 decimal strings are preserved.
+No API key is needed for either.
 
-Otherwise read the whole specimen photograph. Detailed printed coordinates
-are converted locally without geographic research; missing measurement error
-uses the same explicit 1000 m allowance. Otherwise the LLM researches the
-finest legible locality, including collecting-era names and relocated places.
-It uses one relevant local language first, stops when sufficient evidence is
-found and falls back to other languages only as needed.
+## Quick start
 
-For a named area, use a representative center or documented office, with a
-radius covering the possible collecting area. A reported LLM radius is allowed.
-Bounds enlarge an insufficient radius; a missing radius receives a clearly
-identified low-confidence 50000 m policy allowance rather than a false precise
-value. None of these policy defaults is an empirical accuracy guarantee.
+From the VASCULUM root, after `bash setup_mac.sh`:
 
-Printed elevation is retained, converting common imperial units to metres.
-Open-Meteo/Copernicus DEM may select an elevation-compatible point inside the
-named bounds. Sparse DEM samples do not prove that all possible sites have
-been constrained, so the automatic grid step retains a radius covering the
-whole named extent. DEM height is reported to 10 m granularity, not guaranteed
-10 m vertical accuracy. Species-wide --habitat generates warnings only; it
-does not move points or exclude records.
+```bash
+bash llm_georeference_curator/run_llm_georeference_curator.sh \
+  --input herbarium_specimen_collector/output/Haplopteris_mediosora \
+  --limit 10
+```
 
-No upper horizontal-uncertainty limit is imposed by default. For a particular
-analysis, use --max-uncertainty-meters N. This explicit filter excludes an
-otherwise adopted estimate exceeding N; it does not select a less defensible
-alternative just because that alternative reports a smaller radius.
+Check the ten lines it prints, then drop `--limit 10` for the full run. The
+program asks before it spends LLM tokens; add `--yes` to skip the question.
+
+To use Claude Opus instead of Codex, sign in once and add two options:
+
+```bash
+claude auth login
+bash llm_georeference_curator/run_llm_georeference_curator.sh \
+  --input herbarium_specimen_collector/output/Haplopteris_mediosora \
+  --llm-provider claude --llm-model opus --limit 10
+```
+
+If `claude` is not on your `PATH`, the program finds the copy inside the
+Claude desktop app; run `auth login` with that path, which the error message prints.
+
+## What the terminal shows
+
+One line per finished specimen and a single live status line:
+
+```text
+VASCULUM georeference v0.1.17 · 10 records
+label reading gpt-6.1-sol (medium) · research gpt-6.1-sol (medium, web live) · workers 2
+output → llm_georeference_curator/output/Haplopteris_mediosora_georeferenced/
+LLM check: Codex CLI logged in (/Applications/ChatGPT.app/.../codex)
+    #  specimen      result    conf     radius  basis                time    tok  locality
+    1  E01539315     accepted  high     2.0 km  label coords          28s    16k  Myanmar (Burma). Kachin State. Putao Di…
+    2  P01189854     accepted  low      2.5 km  label (LLM)         1m58s   168k  Taiwan; NanTou County; JunDa Forest Roa…
+    3  P02439185     accepted  med      4.0 km  label (LLM)         1m32s   218k  Taiwan JiaYi County ALiShan mixed fores…
+    6  P01187635     accepted  low      2.3 km  existing (coarse)     16s      0  Chinese Taipei
+    8  BOTBC122149   excluded  -             -  miss_                  0s      0  Above Panjiasheng along the trail from …
+[============--------] 6/10 · 3m40s elapsed · ~2m left · 610k tok · failed 0 · now: P01185529 llm georeference
+
+Done 10 → accepted 8 · excluded 2 · 5m25s · 816k tok
+confidence high 1 · medium 1 · low 6 · median radius 3.5 km
+files in llm_georeference_curator/output/Haplopteris_mediosora_georeferenced/: modified_dwc.csv/.tsv, ...
+```
+
+`basis` says where the point came from: `existing`, `existing GPS`,
+`existing (coarse)`, `label coords` (printed on the label), `label (LLM)`
+(researched from the label locality). Add `--verbose` to see every processing
+stage. When output is redirected to a file, the live status line is left out.
 
 ## Outputs
 
-Six primary files are generated in output/<input_name>_georeferenced/:
+Written to `output/<input_name>_georeferenced/` (or `--output PATH`):
 
-- modified_dwc.csv
-- modified_dwc.tsv
-- georeference_candidates.tsv
-- summary.txt
-- georeference.log.jsonl
-- georeference_flow.pdf
+| File | Contents |
+| --- | --- |
+| `modified_dwc.csv`, `modified_dwc.tsv` | Accepted records only, with coordinate, radius, datum, confidence, sources and remarks |
+| `georeference_candidates.tsv` | Every record: label transcription, all candidate points and the decision |
+| `summary.txt` | Counts, models, token use, settings and software versions |
+| `georeference.log.jsonl` | Full audit trail: prompts, model answers, sources, hashes, before/after coordinates |
+| `georeference_flow.pdf` | Ribbon figure of how many records were kept or excluded at each step |
 
-Final DwC contains accepted records, confidence, positive uncertainty, datum,
-protocol, actual sources, decision remarks and unverified verification status.
-The combined TSV retains transcriptions, alternatives and dispositions for all
-records. JSONL logs preserve original/modified coordinates, model calls,
-prompts, hashes, sources, assumptions and technical errors. Originals are not
-modified. --output chooses a separate destination; --dry-run validates inputs
-without LLM requests or new outputs. --input-dwc selects an edited CSV/TSV
-explicitly if the two generated tables differ.
+Input tables and photographs are never modified.
 
-The automatic vector ribbon PDF uses one R/ggalluvial renderer, fixed
-GBIF/CVH/Other grays and 50% opacity. Widths represent actual counts. Exits
-terminate below the retained stream. Complete, hash-matched collector history
-enables collection/deduplication stages; otherwise the figure starts at curator
-input and does not invent missing collection paths. Source ownership after
-deduplication is the retained representative portal, not all contributing portals.
+## How the uncertainty radius is built
 
-Use scripts/plot_georeference_flow.R in RStudio for the same renderer:
-source it, then call plot_georeference_flow(counts, "flow.pdf"). counts is a
-data.frame with source/input/evidence/accepted or
-source/collected/unique/evidence/accepted. The run's counts and R/package/renderer
-versions are retained in summary.txt. Setup installs ggplot2 and ggalluvial into
-the private .Rlibrary; R is checked before any LLM request.
+Following the point-radius method (Chapman & Wieczorek 2020), the radius is the
+sum of the parts that apply:
 
-## Personal Specimens And Identity Checks
+| Component | Value |
+| --- | --- |
+| Rounding of the printed coordinate | from its precision; arc-minute values use ±0.5′, not ±0.05° |
+| Positional error not stated by the source | 1000 m |
+| Datum not stated (WGS84 assumed) | 1000 m, noted as `datum not stated; assumed WGS84` |
+| Named area (township, mountain, …) | radius covering the whole area |
+| Area with unknown extent | 50 km, low confidence |
 
-Before curation, add optional personal/dwc.tsv (or dwc.csv) and whole photos in
-personal/images/ beside the collector output. These are included automatically.
-External tables/directories can be added with repeated --additional-input PATH.
-Photo-only groups become records; use stable occurrenceID values. Names such as
-MY1__front.jpg, MY1__back.jpg and MY1__label.jpg group whole views for one record.
-Ambiguous image ownership and duplicate identifiers are reported, not guessed.
+These are stated policy allowances, not measured errors. No upper limit is
+applied unless you pass `--max-uncertainty-meters N`, which excludes accepted
+points whose radius exceeds N.
 
-After visual inspection, prefix a misidentified specimen's input photograph
-with miss_. Any marked view excludes the entire linked specimen, its final DwC
-row and every exported view, without an LLM call. Markers are case-insensitive
-and originals are retained for undo. --export-images creates a managed final
-image folder for accepted specimens; unknown/edited files and symlinks in that
-folder are protected. The software does not automatically certify identification.
+## Frequently used options
 
-Use run_collect_and_georeference.sh --pause-before-curation to pause between
-collection and curation for additions and visual review. Partial collection
-failures offer a y/n continuation choice.
+| Option | Effect |
+| --- | --- |
+| `--limit N` | Process only the first N records (trial runs) |
+| `--yes` | Do not ask before using LLM tokens |
+| `--llm-provider claude --llm-model opus` | Use Claude Opus through Claude Code instead of Codex |
+| `--llm-reasoning-effort low/medium/high` | Effort for locality research (label reading has `--label-reasoning-effort`) |
+| `--max-uncertainty-meters N` | Exclude points with a radius above N metres |
+| `--export-images` | Copy photos of accepted specimens to `output/.../images/` |
+| `--verbose` | Print every stage instead of one line per specimen |
+| `--dry-run` | Check inputs and options without calling an LLM or writing files |
 
-## Cache And Interruption
+Run `--help` for the full list.
 
-v0.1.15 transcription instructions, response schema and cache-key format are
-unchanged. Reuse the previous .cache/llm_georeference_curator directory (or pass
---llm-cache-dir PATH); matching model/settings, prompt and image content reuse
-the completed reading. No command-line cropping or extra OCR stage is added.
-Only geographic-research instructions changed. Old record decisions are
-recalculated under the new policy; completed transcription responses remain
-reusable. Retry a failed research call without rereading a successful label.
+## Your own specimens and identity checks
 
-Ctrl-C cancels the entire run and all owned provider process groups, including
-parallel workers, with exit code 130. A provider process exiting on SIGINT is
-also treated as whole-run interruption, not a record error followed by the next
-specimen. Completed checkpoints/caches are retained; partial results are not
-published as a completed final dataset.
+- **Add specimens:** put `personal/dwc.tsv` (or `.csv`) and/or photos in
+  `personal/images/` inside the collector output folder. They are included
+  automatically. Photos named `MY1__front.jpg`, `MY1__label.jpg` are grouped as
+  one specimen. Other folders can be added with `--additional-input PATH`.
+- **Exclude a misidentification:** rename its photo with a `miss_` prefix
+  (`P01185529_Taxon.jpg` → `miss_P01185529_Taxon.jpg`). The whole specimen is
+  excluded on the next run without an LLM call. Remove the prefix to undo.
 
-See [methodology](docs/methodology.md) and the root v0.1.16 validation record.
-The point-radius approach follows the concepts of Chapman & Wieczorek (2020),
-with explicit VASCULUM assumptions and automated LLM extensions; it is not a
-claim of guaranteed accuracy or independent validation.
+## Re-running, caching and interruption
+
+- Rerunning the same command resumes: finished records and LLM answers are
+  cached in `.cache/llm_georeference_curator/` and are not paid for twice.
+  Failed records are retried.
+- After upgrading, copy the old `.cache/llm_georeference_curator/` folder (or
+  pass `--llm-cache-dir PATH`) to reuse earlier label readings.
+- Ctrl-C stops the whole run, including LLM subprocesses, with exit code 130.
+  Finished records stay cached.
+
+Exit codes: 0 success, 1 error, 2 invalid options, 3 finished with some failed
+records, 130 interrupted.
+
+## Limitations
+
+- The coordinates have not been compared with an independent ground-truth set,
+  so no positional accuracy is claimed. Six decimal places are formatting.
+- LLM answers and web pages change over time; a fresh run may not reproduce an
+  earlier answer exactly. The cache and log make an existing run auditable.
+- Country and province checks use current Natural Earth boundaries, not
+  historical ones.
+
+See [docs/methodology.md](docs/methodology.md) for the method in detail. The
+approach is inspired by Xie et al. (2025, *Nature Plants* 11:2446–2450) and
+follows the point-radius concepts of Chapman & Wieczorek (2020,
+*Georeferencing: Best Practices*, GBIF).

@@ -1,4 +1,4 @@
-# Automatic Point-Radius Protocol v0.1.16
+# Automatic Point-Radius Protocol v0.1.17
 
 ## Scope And Interpretation
 
@@ -19,10 +19,15 @@ The software never uses review/unresolved record states.
 ## Routing And Exclusions
 
 1. A miss_ mark on any input view excludes the whole specimen first.
-2. Plausible existing decimal coordinates are adopted without an LLM call,
-   irrespective of image availability. Coordinates are checked for range,
-   zero placeholders, geographic conflict and recognizable placeholder patterns.
-   A unique valid latitude/longitude swap can be corrected locally.
+2. Existing coordinates are first checked for range, zero placeholders,
+   geographic conflict and recognizable placeholder patterns; a unique valid
+   latitude/longitude swap is corrected locally. A precise existing coordinate
+   (documented GPS/GNSS or verified, or with a rounding/stated radius of at most
+   1 km) is adopted without an LLM call. A coarse one (radius above 1 km, for
+   example whole arc-minutes, or one point reused by records with different
+   collecting dates) is treated as a regional placeholder: the label photograph
+   is georeferenced as in steps 3-4, and the coarse point is kept only as a
+   low-confidence fallback when there is no photograph or no finer locality.
 3. Otherwise use a local whole specimen photograph. Read the collecting label,
    keeping later determinations, accession labels and different events separate.
    Convert sufficiently detailed printed coordinates before locality research.
@@ -46,16 +51,27 @@ No valid geographical evidence is fabricated to satisfy an output contract.
 
 Original WGS84 coordinates retain their supplied decimal strings. Blank datum
 is interpreted as WGS84 with "datum not stated; assumed WGS84" in remarks and
-a 5000 m policy datum allowance added to the radius. An unrecognized named
+a 1000 m policy datum allowance added to the radius (shifts between WGS84 and
+the legacy datums common on Asian labels, such as Tokyo, Beijing 1954,
+Indian 1975 and TWD67, are typically under 1 km). An unrecognized named
 geographic datum receives a separate explicit assumption note. Recognized
 datums use pyproj/PROJ transformations; transformation error is added where
 available, with a stated policy allowance where accuracy is unknown.
 
 Reported original uncertainty is retained at least at the rounding minimum.
+Rounding is read from the printed decimals, except that decimal degrees
+converted from degrees-minutes(-seconds) keep their sexagesimal step: when one
+value has at least three decimals and both lie on the arc-minute grid
+(e.g. 23.51667, 120.8 = 23°31′, 120°48′), the step is ±0.5′ rather than ±0.05°.
 When positional error is absent, a 1000 m policy allowance is used. Printed
 coordinates combine rounding error with a supplied measurement allowance or
-the same 1000 m default. Assumptions lower confidence and are recorded as
-components; they are not empirically established universal error bounds.
+the same 1000 m default. Allowances are recorded as radius components; they
+are not empirically established universal error bounds. Confidence is high for
+documented GPS points and arc-second label coordinates, medium for other
+precise existing points, low for coarse existing points, and otherwise taken
+from the locality research with downgrades for conflicts, partial labels and
+missing extents. An assumed datum enlarges the radius but does not by itself
+lower confidence.
 
 A named feature is represented by its center, a documented office or a
 better supported collecting-era point. The radius covers the possible

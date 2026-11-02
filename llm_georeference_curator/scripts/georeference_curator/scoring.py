@@ -10,7 +10,7 @@ from .geographic_screen import geographic_problem
 from .models import CoordinateCandidate, CuratedResult
 from .policy import (canonical_crs, documented_original, extent_uncertainty, positive_number,
                      region_conflict, rounding_radius, source_domains, to_wgs84,
-                     UNSTATED_POSITION_ALLOWANCE_METERS)
+                     COARSE_COORDINATE_METERS, UNSTATED_POSITION_ALLOWANCE_METERS)
 
 
 INFERRED_ELEVATION_GRANULARITY_METERS = 10
@@ -47,7 +47,19 @@ def original_coordinate_status(row, reference_regions=None):
     if region_conflict(row, point.latitude, point.longitude, reference_regions or []):
         return "region_conflict"
     problem = geographic_problem(row, point.latitude, point.longitude, placeholders=not documented_original(row))
-    return problem or "trusted"
+    if problem:
+        return problem
+    return "coarse" if not documented_original(row) and coarse_original(row) else "trusted"
+
+
+def coarse_original(row):
+    """A point shared by different collecting events, or coarser than ~1 km, is a regional placeholder."""
+    if row.get("_vasculumSharedCoordinate"):
+        return True
+    reported = positive_number(row.get("coordinateUncertaintyInMeters", ""))
+    if reported is not None:
+        return reported > COARSE_COORDINATE_METERS
+    return (rounding_radius(row.get("decimalLatitude", ""), row.get("decimalLongitude", "")) or 0) > COARSE_COORDINATE_METERS
 
 
 def candidate_base(label):
@@ -75,8 +87,8 @@ def convert_candidate(candidate):
         candidate.candidate_uncertainty_meters = str(math.ceil((positive_number(candidate.candidate_uncertainty_meters) or 0) + allowance))
         candidate.uncertainty_components = json.dumps(components, ensure_ascii=False)
         if point.assumption:
+            # The allowance enters the radius; it does not by itself make the point doubtful.
             candidate.remarks = "; ".join(filter(None, (candidate.remarks, point.assumption, f"datum allowance={allowance:g} m (policy assumption)")))
-            candidate.confidence = "low"
         elif point.accuracy_meters is None:
             candidate.remarks += "; transformation accuracy not stated; 5000 m policy allowance"
             candidate.confidence = "low"
@@ -88,7 +100,7 @@ def convert_candidate(candidate):
 
 def original_candidate(row, label, status):
     lat, lon = parse_decimal(row.get("decimalLatitude", "")), parse_decimal(row.get("decimalLongitude", ""))
-    if lat is None or lon is None or status not in {"trusted", "swapped"}:
+    if lat is None or lon is None or status not in {"trusted", "swapped", "coarse"}:
         return None
     if status == "swapped":
         lat, lon = lon, lat
@@ -97,17 +109,22 @@ def original_candidate(row, label, status):
     precision_longitude = row.get("decimalLatitude") if status == "swapped" else row.get("decimalLongitude")
     minimum = rounding_radius(precision_latitude, precision_longitude) or 1
     radius = max(reported or UNSTATED_POSITION_ALLOWANCE_METERS, minimum)
-    known_datum = bool(canonical_crs(row.get("geodeticDatum", "")))
-    confidence = "high" if reported and known_datum and documented_original(row) else "medium" if reported and known_datum else "low"
+    confidence = "high" if documented_original(row) else "low" if status == "coarse" else "medium"
+    remarks = "" if reported else "positional error not stated; 1000 m policy allowance (not measured accuracy)"
+    if status == "coarse":
+        shared = row.get("_vasculumSharedCoordinate")
+        remarks = "; ".join(filter(None, (remarks, "coarse existing coordinate" + (
+            f" shared by {shared} records with different collecting dates" if shared else f" (rounding radius {minimum} m)"),
+            "kept only as a fallback to the label-photo estimate")))
     candidate = CoordinateCandidate(**candidate_base(label), candidate_latitude=str(lat), candidate_longitude=str(lon),
         candidate_geodetic_datum=row.get("geodeticDatum", ""), candidate_uncertainty_meters=str(math.ceil(radius)),
         reported_uncertainty_meters=str(reported or ""), uncertainty_basis="reported_original" if reported else "policy_original_allowance",
-        confidence=confidence, support_status="documented_original" if documented_original(row) else "plausible_original",
+        confidence=confidence, support_status="documented_original" if documented_original(row) else "coarse_original" if status == "coarse" else "plausible_original",
         candidate_type="original_coordinate", candidate_source="original_dwc", evidence_layers="original_dwc",
         evidence="Existing coordinate retained after plausibility checks" + ("; latitude/longitude swap corrected" if status == "swapped" else ""),
         uncertainty_components=json.dumps({"reportedRadiusMeters": reported, "roundingMinimumMeters": minimum,
             "unstatedPositionAllowanceMeters": 0 if reported else UNSTATED_POSITION_ALLOWANCE_METERS}),
-        remarks="" if reported else "positional error not stated; 1000 m policy allowance (not measured accuracy)")
+        remarks=remarks)
     convert_candidate(candidate)
     if status != "swapped" and (not row.get("geodeticDatum") or canonical_crs(row.get("geodeticDatum", "")) == "EPSG:4326"):
         candidate.candidate_latitude, candidate.candidate_longitude = str(row["decimalLatitude"]), str(row["decimalLongitude"])
@@ -126,7 +143,7 @@ def label_coordinate_candidates(raw_coordinates, label, options=None):
             uncertainty_basis="documented_label" if supplied else "policy_label_allowance",
             uncertainty_components=json.dumps({"coordinateRoundingMinimumMeters": minimum, "measurementAllowanceMeters": measurement,
                 "allowanceSource": "sidecar" if label.coordinate_uncertainty_meters else "user_policy" if supplied else "default_policy_not_measured"}),
-            confidence="high" if supplied and raw.datum else "low",
+            confidence="high" if is_precise_label_coordinate(raw) or (supplied and raw.datum) else "low",
             candidate_type="verbatim_coordinate", candidate_source=f"label:{raw.source}",
             support_status="explicit_label" if is_precise_label_coordinate(raw) else "coarse_label",
             evidence_layers="specimen_label", evidence=f"Printed coordinate: {raw.source_text}; precision={raw.precision_kind}",
@@ -197,7 +214,7 @@ def classify_candidate(candidate, row, options):
         return "excluded", [conflict]
     if candidate.confidence not in CONFIDENCE_RANK:
         candidate.confidence = "low"
-    if candidate.support_status in {"llm_estimate", "gazetteer_name_match", "route_proposal", "coarse_label"}:
+    if candidate.support_status in {"llm_estimate", "gazetteer_name_match", "route_proposal", "coarse_label", "coarse_original"}:
         reasons.append("Best point-radius estimate; confidence is not a calibrated probability")
     if candidate.source_checks:
         checks = json.loads(candidate.source_checks)
@@ -211,7 +228,7 @@ def classify_candidate(candidate, row, options):
 def best_candidate(candidates):
     priorities = {"documented_original": 7, "plausible_original": 7, "explicit_label": 6,
                   "verified_reference": 5, "mapped_locality": 4, "llm_estimate": 3, "gazetteer_name_match": 3,
-                  "coarse_label": 2, "route_proposal": 1}
+                  "coarse_label": 2, "coarse_original": 2, "route_proposal": 1}
     return max(candidates, key=lambda item: (priorities.get(item.support_status, 0), CONFIDENCE_RANK.get(item.confidence, 0)))
 
 
@@ -244,7 +261,7 @@ def select_result(row, label, raw_label_coordinates, llm_candidates, gazetteer_m
             curation_status, reason = "excluded", "User-requested maximum uncertainty exceeded"
     elif insufficient_locality:
         curation_status, reason = "excluded", insufficient_locality
-    elif any(item.curation_status == "excluded" for item in candidates) or status not in {"missing", "trusted", "swapped", "conversion_failed"}:
+    elif any(item.curation_status == "excluded" for item in candidates) or status not in {"missing", "trusted", "coarse", "swapped", "conversion_failed"}:
         curation_status, reason = "excluded", "Coordinates contradict country/state or are obvious placeholders and could not be repaired from the label"
     else:
         curation_status, reason = "failed", "Required point-radius response missing or invalid; retry geographic research"

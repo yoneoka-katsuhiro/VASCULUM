@@ -30,7 +30,7 @@ from georeference_curator.sources import SourceAuditor, public_url
 class PolicyTests(unittest.TestCase):
     def test_crs_conversion_and_unknown_datum(self):
         assumed = to_wgs84(23.5, 120.5, "")
-        self.assertEqual(assumed.accuracy_meters, 5000)
+        self.assertEqual(assumed.accuracy_meters, 1000)
         self.assertIn("datum not stated; assumed WGS84", assumed.assumption)
         wgs = to_wgs84(23.5, 120.5, "EPSG:4326")
         self.assertEqual(wgs.latitude, 23.5)

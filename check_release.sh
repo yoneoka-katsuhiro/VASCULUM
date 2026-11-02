@@ -30,44 +30,46 @@ for required_pattern in ".env" ".venv/" "__pycache__/" ".DS_Store" "output/"; do
   fi
 done
 
-echo "Checking shell scripts..."
-while IFS= read -r script; do
-  bash -n "${script}"
-done < <(find "${ROOT_DIR}" -path "*/.venv" -prune -o -name "*.sh" -type f -print)
-
+START_SECONDS="${SECONDS}"
+TOTAL_TESTS=0
+LOG_FILE="$(mktemp)"
 PYCACHE_DIR="$(mktemp -d)"
-trap 'rm -rf "${PYCACHE_DIR}"' EXIT
+trap 'rm -rf "${PYCACHE_DIR}" "${LOG_FILE}"' EXIT
 export PYTHONPYCACHEPREFIX="${PYCACHE_DIR}"
 
-echo "Compiling Python files..."
-"${COLLECTOR_PYTHON}" -m compileall -q \
-  "${COLLECTOR_DIR}/scripts" "${COLLECTOR_DIR}/tests"
-"${CURATOR_PYTHON}" -m compileall -q \
-  "${CURATOR_DIR}/scripts" "${CURATOR_DIR}/tests"
-"${CHECKLIST_PYTHON}" -m compileall -q \
-  "${CHECKLIST_DIR}/scripts"
+# Run one check quietly; print its output only when it fails.
+run_check() {
+  local label="$1"
+  shift
+  if ! "$@" >"${LOG_FILE}" 2>&1; then
+    echo "FAILED: ${label}" >&2
+    cat "${LOG_FILE}" >&2
+    exit 1
+  fi
+  local count
+  count="$(sed -n 's/^Ran \([0-9][0-9]*\) tests\{0,1\} in .*/\1/p' "${LOG_FILE}" | tail -n 1)"
+  TOTAL_TESTS=$((TOTAL_TESTS + ${count:-0}))
+}
 
-echo "Running collector offline tests..."
-"${COLLECTOR_PYTHON}" "${COLLECTOR_DIR}/tests/test_offline.py"
-"${COLLECTOR_PYTHON}" "${COLLECTOR_DIR}/tests/test_manual_review.py"
-"${COLLECTOR_PYTHON}" "${COLLECTOR_DIR}/tests/test_coordinate_evidence.py"
+while IFS= read -r script; do
+  run_check "shell syntax ${script}" bash -n "${script}"
+done < <(find "${ROOT_DIR}" -path "*/.venv" -prune -o -name "*.sh" -type f -print)
 
-echo "Running georeference curator offline tests..."
-"${CURATOR_PYTHON}" "${CURATOR_DIR}/tests/test_offline.py"
-"${CURATOR_PYTHON}" "${CURATOR_DIR}/tests/test_token_efficiency.py"
-"${CURATOR_PYTHON}" "${CURATOR_DIR}/tests/test_habitat_review.py"
-"${CURATOR_PYTHON}" "${CURATOR_DIR}/tests/test_policy.py"
-"${CURATOR_PYTHON}" "${CURATOR_DIR}/tests/test_photo_policy.py"
-"${CURATOR_PYTHON}" "${CURATOR_DIR}/tests/test_personal_inputs.py"
-"${CURATOR_PYTHON}" "${CURATOR_DIR}/tests/test_manual_review.py"
-"${CURATOR_PYTHON}" "${CURATOR_DIR}/tests/test_ribbon.py"
-"${CURATOR_PYTHON}" "${CURATOR_DIR}/tests/test_auto_acceptance.py"
+run_check "compile collector" "${COLLECTOR_PYTHON}" -m compileall -q "${COLLECTOR_DIR}/scripts" "${COLLECTOR_DIR}/tests"
+run_check "compile curator" "${CURATOR_PYTHON}" -m compileall -q "${CURATOR_DIR}/scripts" "${CURATOR_DIR}/tests"
+run_check "compile checklist" "${CHECKLIST_PYTHON}" -m compileall -q "${CHECKLIST_DIR}/scripts"
 
-echo "Checking CLI entry points..."
-bash "${COLLECTOR_DIR}/run_collect_specimens.sh" --help >/dev/null
-bash "${CURATOR_DIR}/run_llm_georeference_curator.sh" --help >/dev/null
-bash "${CHECKLIST_DIR}/run_checklist.sh" --help >/dev/null
-bash "${ROOT_DIR}/run_collect_and_georeference.sh" --help >/dev/null
+for test_file in "${COLLECTOR_DIR}"/tests/test_*.py; do
+  run_check "${test_file#"${ROOT_DIR}/"}" "${COLLECTOR_PYTHON}" "${test_file}"
+done
+for test_file in "${CURATOR_DIR}"/tests/test_*.py; do
+  run_check "${test_file#"${ROOT_DIR}/"}" "${CURATOR_PYTHON}" "${test_file}"
+done
+
+run_check "collector --help" bash "${COLLECTOR_DIR}/run_collect_specimens.sh" --help
+run_check "curator --help" bash "${CURATOR_DIR}/run_llm_georeference_curator.sh" --help
+run_check "checklist --help" bash "${CHECKLIST_DIR}/run_checklist.sh" --help
+run_check "combined wrapper --help" bash "${ROOT_DIR}/run_collect_and_georeference.sh" --help
 
 if command -v rg >/dev/null 2>&1; then
   if rg -n \
@@ -93,4 +95,4 @@ else
   fi
 fi
 
-echo "Release checks passed."
+echo "Release checks passed: ${TOTAL_TESTS} tests, shell syntax, compilation, CLI entry points, credential scan ($((SECONDS - START_SECONDS))s)."

@@ -2,21 +2,16 @@
 set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+export VASCULUM_SETUP_QUIET=1
 
-echo "Setting up herbarium_specimen_collector..."
+echo "[1/4] herbarium_specimen_collector: Python environment"
 bash "${ROOT_DIR}/herbarium_specimen_collector/setup_mac.sh"
-
-echo
-echo "Setting up llm_georeference_curator..."
+echo "[2/4] llm_georeference_curator: Python environment and R plotting packages"
 bash "${ROOT_DIR}/llm_georeference_curator/setup_mac.sh"
-
-echo
-echo "Setting up checklist..."
+echo "[3/4] checklist: Python environment"
 bash "${ROOT_DIR}/checklist/setup_mac.sh"
-
-echo
+echo "[4/4] offline release checks"
 bash "${ROOT_DIR}/check_release.sh"
 
 echo
-echo "VASCULUM setup complete."
-echo "See README.md for independent, combined, and checklist workflow examples."
+echo "VASCULUM setup complete. Next: see 'Quick start' in README.md."

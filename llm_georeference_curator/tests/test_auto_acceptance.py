@@ -58,10 +58,11 @@ class AutoAcceptanceTests(unittest.TestCase):
             output = read_rows(root / "out" / "modified_dwc.tsv")[0]
             self.assertEqual(report.accepted, 1)
             self.assertEqual((output["decimalLatitude"], output["decimalLongitude"]), ("27.619417", "96.981778"))
-            self.assertEqual(output["coordinateUncertaintyInMeters"], "6000")
+            # 1000 m unstated positional error + 1000 m datum allowance; no 5 km penalty since v0.1.17.
+            self.assertEqual(output["coordinateUncertaintyInMeters"], "2000")
             self.assertIn("datum not stated; assumed WGS84", output["georeferenceRemarks"])
             self.assertEqual(output["georeferenceVerificationStatus"], "unverified")
-            self.assertEqual(output["confidence"], "low")
+            self.assertEqual(output["confidence"], "medium")
 
     def test_PE00684280_partial_township_label_is_accepted(self):
         label = LabelRead(catalog_number="PE00684280", label_status="image_unreadable",

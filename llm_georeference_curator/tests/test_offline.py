@@ -157,7 +157,8 @@ class OfflineTests(unittest.TestCase):
         self.assertEqual(review.row["decimalLatitude"], "23.522778")
         self.assertEqual(review.row["coordinateUncertaintyInMeters"], "1030")
         self.assertTrue(review.include_in_dwc)
-        self.assertEqual(review.row["confidence"], "low")
+        # A printed arc-second coordinate is strong evidence even without a stated measurement error.
+        self.assertEqual(review.row["confidence"], "high")
         accepted = select(coordinates=raw, options=SelectionOptions(label_coordinate_uncertainty_meters=30))
         self.assertEqual(accepted.curation_status, "accepted")
         self.assertTrue(accepted.include_in_dwc)

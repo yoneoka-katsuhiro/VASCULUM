@@ -5,10 +5,32 @@ import argparse
 import sys
 from pathlib import Path
 
-from georeference_curator.pipeline import run_pipeline
+from georeference_curator.pipeline import display_path, run_pipeline
+from georeference_curator.progress import TerminalProgress, format_duration, format_radius, format_tokens
 
 
 PROJECT_DIR = Path(__file__).resolve().parents[1]
+
+
+def print_run_summary(report, *, export_images=False):
+    """Three-line run summary on stderr; details stay in summary.txt."""
+    elapsed = (report.finished_at - report.started_at).total_seconds() if report.finished_at else 0
+    tokens = report.llm_input_tokens + report.llm_output_tokens
+    failed = f" · failed {report.failed} (rerun the same command to retry)" if report.failed else ""
+    print(f"\nDone {report.records_read} → accepted {report.accepted} · excluded {report.excluded}{failed}"
+          f" · {format_duration(elapsed)} · {format_tokens(tokens)} tok", file=sys.stderr)
+    if report.accepted:
+        counts = " · ".join(f"{level} {report.confidence_counts.get(level, 0)}" for level in ("high", "medium", "low"))
+        print(f"confidence {counts} · median radius {format_radius(report.median_uncertainty_meters)}", file=sys.stderr)
+    files = ["modified_dwc.csv/.tsv", "georeference_candidates.tsv", "summary.txt"]
+    files += ["georeference_flow.pdf"] if report.ribbon_path else []
+    files += [f"images/ ({report.images_exported})"] if report.images_exported or export_images else []
+    files.append("georeference.log.jsonl")
+    print(f"files in {display_path(report.output_dir)}: " + ", ".join(files), file=sys.stderr)
+    for error in report.errors[:5]:
+        print(f"error: {error}", file=sys.stderr)
+    if len(report.errors) > 5:
+        print(f"… {len(report.errors) - 5} more errors in summary.txt", file=sys.stderr)
 
 
 def parse_args():
@@ -40,11 +62,11 @@ def parse_args():
     parser.add_argument("--llm-mode", choices=("auto", "on", "off"), default="auto", help="auto uses an available provider, on requires it, off disables LLM use.")
     parser.add_argument(
         "--llm-provider",
-        choices=("codex-cli", "codex", "openai", "opus", "opus5", "fable5", "custom-cli"),
+        choices=("codex-cli", "codex", "claude-cli", "claude", "openai", "opus", "opus5", "fable5", "custom-cli"),
         default="codex-cli",
-        help="Default codex-cli uses saved Codex/ChatGPT login through codex exec.",
+        help="codex-cli (default) uses your ChatGPT login through codex exec; claude uses your Claude login through Claude Code (claude -p).",
     )
-    parser.add_argument("--llm-model", default="auto", help="Model name or auto. Provider candidates can be set with CODEX_MODEL_CANDIDATES, OPUS_MODEL_CANDIDATES, etc.")
+    parser.add_argument("--llm-model", default="auto", help="Model name or auto (codex: gpt-6.1-sol; claude: opus). Candidates can be set with CODEX_MODEL_CANDIDATES, CLAUDE_MODEL_CANDIDATES, etc.")
     parser.add_argument("--llm-reasoning-effort", default="", help="Coordinate-research reasoning effort. Default: medium or environment override.")
     parser.add_argument("--label-model", default="", help="Label-reading model. Default: same as --llm-model, or LLM_LABEL_MODEL.")
     parser.add_argument("--label-reasoning-effort", default="", help="Label-reading effort. Default: medium or LLM_LABEL_REASONING_EFFORT.")
@@ -106,6 +128,7 @@ def parse_args():
         ),
     )
     parser.add_argument("--yes", action="store_true", help="Skip interactive confirmation before real LLM and external geospatial service calls.")
+    parser.add_argument("--verbose", action="store_true", help="Also print each processing stage and run details; by default the terminal shows one line per specimen.")
     parser.add_argument("--resume", action=argparse.BooleanOptionalAction, default=True, help="Reuse completed record checkpoints when inputs/code/settings match.")
     parser.add_argument("--verify-source-urls", action=argparse.BooleanOptionalAction, default=True, help="Retrieve bounded source snapshots; reachability is not factual verification.")
     parser.add_argument("--refresh-sources", action="store_true", help="Refresh source snapshots and bypass completed-record checkpoints.")
@@ -204,6 +227,7 @@ def main() -> int:
             include_personal=args.include_personal,
             import_unlinked_images=args.import_unlinked_images,
             export_images=args.export_images,
+            progress=TerminalProgress(verbose=args.verbose),
         )
     except (KeyboardInterrupt, EOFError):
         print("\nInterrupted. All record workers stopped; completed checkpoints and transcription caches are preserved.", file=sys.stderr)
@@ -220,18 +244,9 @@ def main() -> int:
         )
         return 0
 
+    print_run_summary(report, export_images=args.export_images)
+    # stdout carries only the output directory, so wrappers can capture it.
     print(f"Output: {report.output_dir}")
-    print(f"Modified DwC CSV: {report.output_dir / 'modified_dwc.csv'}")
-    print(f"Modified DwC TSV: {report.output_dir / 'modified_dwc.tsv'}")
-    print(f"Candidates TSV: {report.output_dir / 'georeference_candidates.tsv'}")
-    print(f"Summary: {report.output_dir / 'summary.txt'}")
-    if report.ribbon_path:
-        print(f"Ribbon PDF: {report.ribbon_path}")
-    if report.images_exported:
-        print(f"Final images: {report.output_dir / 'images'} ({report.images_exported})")
-    elif args.export_images:
-        print("Final images: none (no included local images)")
-    print(f"Log: {report.output_dir / 'georeference.log.jsonl'}")
     if report.partial_failure:
         print(f"Completed with {len(report.errors)} error(s); see summary.txt.", file=sys.stderr)
         return 3

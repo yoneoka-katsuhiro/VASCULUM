@@ -15,6 +15,7 @@ from .geocoding import (
     extract_decimal_coordinates,
     is_precise_label_coordinate,
     match_gazetteer,
+    parse_decimal,
     read_gazetteer,
 )
 from .checkpoints import RecordJournal, file_hash, fingerprint, implementation_signature
@@ -59,7 +60,7 @@ from .locality_quality import insufficient_locality_reason
 from .models import RunReport, CoordinateCandidate, CuratedResult
 from .outputs import merged_fieldnames, write_candidates, write_dwc_exports, write_json_log, write_summary
 from .parallel import RateLimitBackoff, is_rate_limit_error, resolve_worker_count
-from .progress import TerminalProgress
+from .progress import RecordLine, TerminalProgress
 from .scoring import SelectionOptions, candidate_base, original_coordinate_status, select_result
 from .policy import read_reference_regions
 from .sources import SourceAuditor, audit_candidates
@@ -122,6 +123,45 @@ class RowOutcome:
     habitat_review_warnings: int = 0
     habitat_review_unknown: int = 0
     habitat_review_unavailable: int = 0
+    elapsed_seconds: float = 0.0
+
+
+RECORD_BASIS = {
+    "documented_original": "existing GPS", "plausible_original": "existing", "coarse_original": "existing (coarse)",
+    "explicit_label": "label coords", "coarse_label": "label coords ~", "verified_reference": "reference",
+    "gazetteer_name_match": "gazetteer", "mapped_locality": "label (LLM)", "llm_estimate": "label (LLM)",
+    "route_proposal": "label (LLM) route",
+}
+EXCLUSION_BASIS = {
+    "exclude_manual_misidentification": "miss_", "exclude_insufficient_locality": "locality too broad",
+    "exclude_missing_source_image": "no photo/coords", "exclude_coordinate_conflict": "coord conflict",
+    "exclude_uncertainty_limit": "over max radius", "failed": "retry later",
+}
+
+
+def record_line(completed, total, row, outcome):
+    """Summarize one finished specimen for the terminal."""
+    result = outcome.result
+    selected = result.selected_candidate
+    if result.curation_status == "accepted" and selected:
+        basis = RECORD_BASIS.get(selected.support_status, selected.support_status or "-")
+    else:
+        basis = EXCLUSION_BASIS.get(result.decision, result.decision)
+    locality = next((item.locality_text for item in ([selected] if selected else []) + list(outcome.candidates)
+                     if item and item.locality_text), "") or row.get("locality", "") or \
+        ", ".join(filter(None, (row.get("stateProvince", ""), row.get("country", ""))))
+    tokens = sum(int(stage.get("usage", {}).get(key) or 0) for stage in outcome.llm_usage
+                 for key in ("input_tokens", "output_tokens"))
+    return RecordLine(completed=completed, total=total, catalog=catalog_number(row), result=result.curation_status,
+        confidence=result.row.get("confidence", ""), radius_meters=result.row.get("coordinateUncertaintyInMeters", ""),
+        basis=basis, locality=" ".join(locality.split()), seconds=outcome.elapsed_seconds, tokens=tokens)
+
+
+def display_path(path):
+    try:
+        return f"{Path(path).resolve().relative_to(Path.cwd())}/"
+    except ValueError:
+        return f"{path}/"
 
 
 def protocol_text(
@@ -333,6 +373,9 @@ def process_row(
         outcome.image_review_records += 1
 
     original_status = original_coordinate_status(row, options.reference_regions)
+    if original_status == "coarse" and not label.image_paths:
+        # Without a photograph there is nothing to refine; the coarse point is kept as is.
+        original_status = "trusted"
     if original_status == "conversion_failed" and not label.image_paths:
         outcome.stage_errors.append({"stage": "coordinate_conversion", "retryable": True, "error": "Existing CRS transformation failed and no label photograph is available."})
         outcome.errors.append(f"{catalog}: existing CRS transformation failed")
@@ -413,8 +456,9 @@ def process_row(
         insufficient_reason = insufficient_locality_reason(label_context, label)
         if insufficient_reason and not any(is_precise_label_coordinate(value) for value in raw_coordinates):
             outcome.llm_skipped_insufficient_locality += 1
-            return screened_outcome(outcome, row, label, status="excluded",
-                decision="exclude_insufficient_locality", reason=insufficient_reason)
+            if original_status != "coarse":
+                return screened_outcome(outcome, row, label, status="excluded",
+                    decision="exclude_insufficient_locality", reason=insufficient_reason)
         gazetteer_matches = match_gazetteer(label_context,
             "\n".join(filter(None, (label.label_transcription, label.locality_text))), gazetteer)
 
@@ -500,12 +544,14 @@ def process_row(
                 if exclusion == "country_or_admin1_only" and label.locality_text.strip() and not insufficient_reason:
                     llm_cache.discard(response.get("_vasculum_request", {}).get("responseCacheKey", ""))
                     raise ValueError("Provider rejected a specific legible locality instead of supplying its required best point-radius estimate; retry research")
-                if exclusion in {"country_or_admin1_only", "coordinate_admin_conflict"}:
+                if exclusion in {"country_or_admin1_only", "coordinate_admin_conflict"} and original_status != "coarse":
                     return screened_outcome(outcome, row, label, status="excluded",
                         decision="exclude_insufficient_locality" if exclusion == "country_or_admin1_only" else "exclude_coordinate_conflict",
                         reason=str(response.get("remarks") or exclusion))
-                llm_cache.discard(response.get("_vasculum_request", {}).get("responseCacheKey", ""))
-                raise ValueError("Required best point-radius estimate missing from geographic-research response")
+                if original_status != "coarse":
+                    # A coarse existing point remains the fallback when research finds nothing finer.
+                    llm_cache.discard(response.get("_vasculum_request", {}).get("responseCacheKey", ""))
+                    raise ValueError("Required best point-radius estimate missing from geographic-research response")
         except Exception as exc:
             outcome.llm_errors += 1
             outcome.errors.append(f"{catalog}: LLM georeferencing failed: {exc}")
@@ -586,7 +632,8 @@ def process_row(
                 result.row["georeferenceRemarks"] += "; elevation_source=DEM; elevation_granularity_m=10; vertical_accuracy_not_guaranteed"
         except Exception as exc:
             outcome.geospatial_refinement_warnings.append(f"{catalog}: DEM elevation unavailable: {exc}")
-    if outcome.stage_errors and result.curation_status != "accepted":
+    # A technical failure must not silently fall back to a coarse existing point; retry instead.
+    if outcome.stage_errors and (result.curation_status != "accepted" or original_status == "coarse"):
         result.curation_status = "failed"
         result.decision = "failed"
         result.verification_status = "unverified"
@@ -627,7 +674,7 @@ def process_row(
             result.selected_candidate.habitat_review_sources = review.sources
         if review.status == "warning":
             result.notes.append(f"Habitat review warning: {review.remarks}")
-            progress.update(f"Habitat review warning: {catalog} | coordinates retained | {review.remarks}")
+            progress.detail(f"habitat note: {catalog} | coordinates retained | {review.remarks}")
     if result.curation_status == "failed" and not outcome.stage_errors:
         error = {"stage": "coordinate_research", "retryable": True, "error": result.exclusion_reason}
         outcome.stage_errors.append(error)
@@ -692,6 +739,19 @@ def aggregate_outcome(report: RunReport, outcome: RowOutcome):
         report.corrected_existing += 1
     elif result.include_in_dwc and result.decision == "infer_missing":
         report.inferred_missing += 1
+
+
+def mark_shared_coordinates(rows):
+    """Flag one point reused across different collecting dates (a regional placeholder, not a GPS fix)."""
+    dates_by_point = {}
+    for row in rows:
+        lat, lon = parse_decimal(row.get("decimalLatitude", "")), parse_decimal(row.get("decimalLongitude", ""))
+        if lat is not None and lon is not None:
+            dates_by_point.setdefault((round(lat, 5), round(lon, 5)), []).append(row)
+    for group in dates_by_point.values():
+        if len({row.get("eventDate", "").strip() for row in group}) > 1:
+            for row in group:
+                row["_vasculumSharedCoordinate"] = str(len(group))
 
 
 @interruptible
@@ -783,6 +843,7 @@ def run_pipeline(
         if markers:
             mark_misidentification(row, markers, source_dir)
     gazetteer = read_gazetteer(gazetteer_tsv.expanduser().resolve() if gazetteer_tsv else None)
+    mark_shared_coordinates(bundle.rows)
 
     needs_llm = any(not row.get("_vasculumMissMarkers") and
         original_coordinate_status(row, reference_regions) not in {"trusted", "swapped"} and
@@ -865,11 +926,18 @@ def run_pipeline(
         return report
     ribbon_renderer = prepare_ribbon_renderer(project_dir)
     ribbon_runtime = renderer_provenance(project_dir, ribbon_renderer)
-    progress.update(f"Input selection: {len(rows)} records | personal DwC={bundle.personal_dwc_records}, photo-only={bundle.photo_only_records}, additional photos={bundle.attached_personal_images}")
+    personal = [f"{count} {name}" for count, name in ((bundle.personal_dwc_records, "personal DwC rows"),
+        (bundle.photo_only_records, "photo-only specimens"), (bundle.attached_personal_images, "added photos")) if count]
+    progress.update(f"VASCULUM georeference {version} · {len(rows)} records" + (f" ({', '.join(personal)})" if personal else ""))
     if llm_client:
-        progress.update(
-            f"Label reading: {report.label_model} ({report.label_reasoning_effort}, no web)"
-        )
+        progress.update(f"label reading {report.label_model} ({report.label_reasoning_effort}) · research {report.llm_model} "
+                        f"({report.llm_reasoning_effort}, web {report.llm_web_search}) · workers {worker_count}")
+    else:
+        progress.update(f"no LLM needed for these records · workers {worker_count}")
+    progress.update(f"output → {display_path(destination)}")
+    for warning in bundle.warnings:
+        progress.update(f"warning: {warning}")
+    if llm_client:
         preflight_llm(
             llm_settings,
             confirm=confirm_llm,
@@ -896,25 +964,13 @@ def run_pipeline(
         reference_regions=reference_regions,
     )
 
-    progress.update(f"Reading {len(rows)} DwC record(s) from {dwc_path}")
-    progress.update(f"Personal inputs: {bundle.personal_dwc_records} DwC rows | {bundle.photo_only_records} photo-only specimens | {bundle.attached_personal_images} photos linked to existing records")
-    for warning in bundle.warnings:
-        progress.update(f"Input warning: {warning}")
+    progress.detail(f"input DwC: {dwc_path}")
     if normalized_habitat:
-        progress.update(f"Habitat review only: {normalized_habitat}")
-    progress.update(f"Workers: {worker_count}")
-    progress.update(
-        f"Label reading: {report.label_model} ({report.label_reasoning_effort}, no web) | "
-        f"Coordinate research: {report.llm_model} ({report.llm_reasoning_effort})"
-    )
-    progress.update(
-        "Stage timeouts: "
-        f"label={label_timeout_seconds}s, "
-        f"georeference={georeference_timeout_seconds}s, "
-        f"verification={verification_timeout_seconds}s"
-    )
+        progress.detail(f"habitat (advisory only): {normalized_habitat}")
+    progress.detail(f"stage timeouts: label {label_timeout_seconds}s · research {georeference_timeout_seconds}s · "
+                    f"verification {verification_timeout_seconds}s")
     if llm_client and llm_cache_enabled:
-        progress.update(f"LLM response cache: {cache_directory}")
+        progress.detail(f"LLM response cache: {cache_directory}")
     curated_rows = []
     all_candidates = []
     results = []
@@ -1022,23 +1078,20 @@ def run_pipeline(
         return outcome
 
     def safe_run_record(index, row):
+        started = time.monotonic()
         try:
-            return run_record(index, row)
+            outcome = run_record(index, row)
         except Exception as exc:
-            return failed_outcome(index, row, exc)
+            outcome = failed_outcome(index, row, exc)
+        outcome.elapsed_seconds = time.monotonic() - started
+        return outcome
 
     if worker_count <= 1:
         for index, row in enumerate(rows, start=1):
             outcome = safe_run_record(index, row)
             outcomes[index] = outcome
             aggregate_outcome(report, outcome)
-            progress.complete_record(
-                index,
-                len(rows),
-                catalog_number(row),
-                outcome.result.decision,
-                outcome.result.verification_status,
-            )
+            progress.complete_record(record_line(index, len(rows), row, outcome))
     else:
         with ThreadPoolExecutor(max_workers=worker_count) as executor:
             futures = {
@@ -1055,13 +1108,7 @@ def run_pipeline(
                     outcomes[index] = outcome
                     aggregate_outcome(report, outcome)
                     completed += 1
-                    progress.complete_record(
-                        completed,
-                        len(rows),
-                        catalog_number(rows[index - 1]),
-                        outcome.result.decision,
-                        outcome.result.verification_status,
-                    )
+                    progress.complete_record(record_line(completed, len(rows), rows[index - 1], outcome))
 
     for index in range(1, len(rows) + 1):
         outcome = outcomes[index]
@@ -1079,6 +1126,8 @@ def run_pipeline(
     write_candidates(destination, all_candidates)
     write_json_log(destination / "georeference.log.jsonl", results)
     report.records_written = len(curated_rows)
+    radii = sorted(float(row["coordinateUncertaintyInMeters"]) for row in curated_rows if parse_decimal(row.get("coordinateUncertaintyInMeters", "")) is not None)
+    report.median_uncertainty_meters = (radii[len(radii) // 2] + radii[(len(radii) - 1) // 2]) / 2 if radii else None
     report.llm_provider_attempts = llm_backoff.calls
     report.candidate_rows = len(all_candidates)
     try:
@@ -1093,7 +1142,6 @@ def run_pipeline(
         report.errors.append(f"Ribbon plot: {exc}. DwC, candidate TSV and log were preserved.")
     report.finished_at = datetime.now().astimezone()
     write_summary(destination / "summary.txt", report)
-    progress.update(f"Complete - {destination}")
     if hasattr(progress, "finish_run"):
         progress.finish_run()
     return report

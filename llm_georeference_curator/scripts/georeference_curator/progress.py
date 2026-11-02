@@ -1,5 +1,12 @@
+"""Terminal progress: one line per finished specimen plus a single live status line.
+
+Everything here goes to stderr so stdout stays free for results. The live status
+line is drawn only on a terminal; redirected output gets the per-record lines
+alone. Stage-level messages appear only with --verbose.
+"""
 from __future__ import annotations
 
+import shutil
 import sys
 import threading
 import time
@@ -8,14 +15,7 @@ from dataclasses import dataclass
 
 
 PROGRESS_BAR_WIDTH = 20
-RECORD_STAGE_TOTAL = 3
-RECORD_STAGE_NUMBER = {
-    "Label reading": 1,
-    "LLM georeference": 2,
-    "Coordinate verification": 3,
-    "Source audit": 3,
-    "Habitat review": 3,
-}
+STATUS_REFRESH_SECONDS = 1.0
 
 
 def progress_bar(completed: int, total: int, width: int = PROGRESS_BAR_WIDTH) -> str:
@@ -28,195 +28,194 @@ def progress_bar(completed: int, total: int, width: int = PROGRESS_BAR_WIDTH) ->
     return f"[{'=' * filled}{'-' * (width - filled)}]"
 
 
+def format_radius(meters) -> str:
+    try:
+        value = float(meters)
+    except (TypeError, ValueError):
+        return "-"
+    return f"{value:.0f} m" if value < 1000 else f"{value / 1000:.1f} km"
+
+
+def format_tokens(tokens: int) -> str:
+    if tokens < 1000:
+        return str(tokens)
+    if tokens < 1_000_000:
+        return f"{round(tokens / 1000)}k"
+    return f"{tokens / 1_000_000:.1f}M"
+
+
+def format_duration(seconds: float) -> str:
+    seconds = int(seconds)
+    if seconds < 60:
+        return f"{seconds}s"
+    minutes, seconds = divmod(seconds, 60)
+    if minutes < 60:
+        return f"{minutes}m{seconds:02d}s"
+    hours, minutes = divmod(minutes, 60)
+    return f"{hours}h{minutes:02d}m"
+
+
+@dataclass
+class RecordLine:
+    completed: int
+    total: int
+    catalog: str
+    result: str
+    confidence: str = ""
+    radius_meters: str = ""
+    basis: str = ""
+    locality: str = ""
+    seconds: float = 0.0
+    tokens: int = 0
+
+
+RECORD_HEADER = f"{'#':>5}  {'specimen':<14}{'result':<10}{'conf':<6}{'radius':>9}  {'basis':<18}{'time':>7}{'tok':>7}  locality"
+
+
+def format_record_line(line: RecordLine) -> str:
+    confidence = {"medium": "med"}.get(line.confidence, line.confidence) if line.result == "accepted" else "-"
+    radius = format_radius(line.radius_meters) if line.result == "accepted" else "-"
+    locality = line.locality if len(line.locality) <= 40 else line.locality[:39] + "…"
+    return (f"{line.completed:>5}  {line.catalog[:13]:<14}{line.result:<10}{confidence:<6}{radius:>9}  "
+            f"{line.basis[:17]:<18}{format_duration(line.seconds):>7}{format_tokens(line.tokens):>7}  {locality}")
+
+
 @dataclass
 class ActivityState:
-    message: str
     stage: str
-    index: int | None
-    total: int | None
     catalog: str
     model: str
     started: float
 
 
 class TerminalProgress:
-    def __init__(self, enabled: bool = True) -> None:
+    def __init__(self, enabled: bool = True, verbose: bool = False) -> None:
         self.enabled = enabled
+        self.verbose = verbose
         self.parallel = False
         self._lock = threading.Lock()
         self._activity_id = 0
         self._active: dict[int, ActivityState] = {}
-        self._completed_records = 0
-        self._total_records = 0
-        self._worker_count = 1
-        self._reporter_stop = threading.Event()
-        self._reporter_thread: threading.Thread | None = None
+        self._completed = 0
+        self._total = 0
+        self._failed = 0
+        self._tokens = 0
+        self._started = time.monotonic()
+        self._header_printed = False
+        self._status_shown = False
+        self._stop = threading.Event()
+        self._ticker: threading.Thread | None = None
+
+    @property
+    def _live(self) -> bool:
+        return self.enabled and not self.verbose and sys.stderr.isatty()
 
     def set_parallel(self, enabled: bool) -> None:
         self.parallel = enabled
 
     def configure_run(self, *, total_records: int, worker_count: int) -> None:
         with self._lock:
-            self._total_records = total_records
-            self._worker_count = worker_count
+            self._total = total_records
+            self._started = time.monotonic()
 
     def update(self, message: str) -> None:
+        """A run-level message such as the header or a warning."""
         if self.enabled:
-            with self._lock:
-                print(message, flush=True)
+            self._write_line(message)
 
-    def complete_record(self, completed: int, total: int, catalog: str, decision: str, verification: str) -> None:
+    def detail(self, message: str) -> None:
+        """Diagnostic detail shown only with --verbose; the log keeps the rest."""
+        if self.enabled and self.verbose:
+            self._write_line(message)
+
+    def complete_record(self, line: RecordLine) -> None:
+        with self._lock:
+            self._completed = line.completed
+            self._total = line.total or self._total
+            self._tokens += line.tokens
+            self._failed += line.result == "failed"
         if not self.enabled:
             return
-        with self._lock:
-            self._completed_records = completed
-            active_count = len(self._active)
-            print(
-                f"{progress_bar(completed, total)} "
-                f"{completed}/{total} records complete | "
-                f"{catalog} | {decision} | {verification} | active={active_count}",
-                file=sys.stderr,
-                flush=True,
-            )
+        if not self._header_printed:
+            self._header_printed = True
+            self._write_line(RECORD_HEADER)
+        self._write_line(format_record_line(line))
 
     def finish_run(self) -> None:
-        self._reporter_stop.set()
-        thread = self._reporter_thread
-        if thread and thread.is_alive():
-            thread.join(timeout=2.0)
-
-    def _activity_progress(self, activity: ActivityState, status: str = "active") -> str:
-        stage_number = RECORD_STAGE_NUMBER.get(activity.stage, 0)
-        stage_bar = progress_bar(stage_number, RECORD_STAGE_TOTAL)
-        catalog = activity.catalog or "unknown-record"
-        stage = activity.stage or activity.message
-        elapsed = int(time.monotonic() - activity.started)
-        model = f" | {activity.model}" if activity.model else ""
-        return (
-            f"{stage_bar} {stage_number}/{RECORD_STAGE_TOTAL} "
-            f"{catalog} | {stage}{model} | {status} {elapsed}s"
-        )
-
-    def _ensure_parallel_reporter(self, stream) -> None:
-        if self._reporter_thread and self._reporter_thread.is_alive():
-            return
-        self._reporter_stop.clear()
-
-        def report() -> None:
-            while not self._reporter_stop.wait(10.0):
-                with self._lock:
-                    if not self._active:
-                        continue
-                    active = list(self._active.values())
-                    total = self._total_records or (active[0].total or 0)
-                    print(
-                        f"{progress_bar(self._completed_records, total)} "
-                        f"{self._completed_records}/{total} records complete | "
-                        f"workers={self._worker_count} | active={len(active)}",
-                        file=stream,
-                        flush=True,
-                    )
-                    for activity in sorted(
-                        active,
-                        key=lambda item: (
-                            item.index if item.index is not None else sys.maxsize,
-                            item.started,
-                        ),
-                    ):
-                        print(
-                            f"  {self._activity_progress(activity)}",
-                            file=stream,
-                            flush=True,
-                        )
-
-        self._reporter_thread = threading.Thread(target=report, daemon=True)
-        self._reporter_thread.start()
+        self._stop.set()
+        if self._ticker and self._ticker.is_alive():
+            self._ticker.join(timeout=2.0)
+        with self._lock:
+            self._clear_status()
 
     @contextmanager
-    def activity(
-        self,
-        message: str,
-        *,
-        stage: str = "",
-        index: int | None = None,
-        total: int | None = None,
-        catalog: str = "",
-        model: str = "",
-    ):
+    def activity(self, message: str, *, stage: str = "", index: int | None = None, total: int | None = None,
+                 catalog: str = "", model: str = ""):
         if not self.enabled:
             yield
             return
-
-        stop = threading.Event()
-        started = time.monotonic()
-        stream = sys.stderr
-        dynamic = stream.isatty() and not self.parallel
-        activity_id = 0
-        activity_state = ActivityState(
-            message=message,
-            stage=stage,
-            index=index,
-            total=total,
-            catalog=catalog,
-            model=model,
-            started=started,
-        )
-        if self.parallel:
-            with self._lock:
-                self._activity_id += 1
-                activity_id = self._activity_id
-                self._active[activity_id] = activity_state
-                self._ensure_parallel_reporter(stream)
-                print(
-                    self._activity_progress(activity_state),
-                    file=stream,
-                    flush=True,
-                )
-
-        def animate() -> None:
-            frames = "|/-\\"
-            frame_index = 0
-            while not stop.is_set():
-                elapsed = int(time.monotonic() - started)
-                text = self._activity_progress(
-                    activity_state,
-                    status=f"active {frames[frame_index % len(frames)]}",
-                )
-                if dynamic:
-                    with self._lock:
-                        stream.write(f"\r{text}")
-                        stream.flush()
-                elif elapsed == 0 or elapsed % 5 == 0:
-                    with self._lock:
-                        print(text, file=stream, flush=True)
-                frame_index += 1
-                stop.wait(1.0)
-
-        thread = threading.Thread(target=animate, daemon=True)
-        if not self.parallel:
-            thread.start()
+        state = ActivityState(stage=stage or message, catalog=catalog, model=model, started=time.monotonic())
+        with self._lock:
+            self._activity_id += 1
+            activity_id = self._activity_id
+            self._active[activity_id] = state
+        self._ensure_ticker()
         succeeded = False
         try:
             yield
             succeeded = True
         finally:
-            stop.set()
-            if not self.parallel:
-                thread.join(timeout=2.0)
-            elapsed = int(time.monotonic() - started)
             with self._lock:
-                if self.parallel and activity_id in self._active:
-                    activity = self._active.pop(activity_id)
-                    print(
-                        self._activity_progress(activity, status="done" if succeeded else "failed"),
-                        file=stream,
-                        flush=True,
-                    )
-                elif dynamic:
-                    stream.write("\r\033[K")
-                if not self.parallel:
-                    print(
-                        self._activity_progress(activity_state, status="done" if succeeded else "failed"),
-                        file=stream,
-                        flush=True,
-                    )
+                self._active.pop(activity_id, None)
+            if self.verbose:
+                elapsed = int(time.monotonic() - state.started)
+                model_text = f" | {state.model}" if state.model else ""
+                self._write_line(f"  {state.catalog or '-'} | {state.stage}{model_text} | {'done' if succeeded else 'failed'} {elapsed}s")
+
+    def status_text(self) -> str:
+        elapsed = time.monotonic() - self._started
+        parts = [f"{progress_bar(self._completed, self._total)} {self._completed}/{self._total}",
+                 f"{format_duration(elapsed)} elapsed"]
+        if 0 < self._completed < self._total:
+            parts.append(f"~{format_duration(elapsed / self._completed * (self._total - self._completed))} left")
+        parts.append(f"{format_tokens(self._tokens)} tok")
+        parts.append(f"failed {self._failed}")
+        active = sorted(self._active.values(), key=lambda item: item.started)
+        names = [f"{item.catalog} {item.stage.lower()}" if item.catalog else item.stage.lower() for item in active[:2]]
+        if names:
+            parts.append("now: " + ", ".join(names))
+        # A wrapped status line cannot be erased with \r, so keep it within one terminal row.
+        return " · ".join(parts)[:shutil.get_terminal_size().columns - 1]
+
+    def _ensure_ticker(self) -> None:
+        if not self._live or (self._ticker and self._ticker.is_alive()):
+            return
+        self._stop.clear()
+
+        def tick() -> None:
+            while not self._stop.wait(STATUS_REFRESH_SECONDS):
+                with self._lock:
+                    self._draw_status()
+
+        self._ticker = threading.Thread(target=tick, daemon=True)
+        self._ticker.start()
+
+    def _write_line(self, text: str) -> None:
+        with self._lock:
+            self._clear_status()
+            print(text, file=sys.stderr, flush=True)
+            if self._live and self._ticker and self._ticker.is_alive():
+                self._draw_status()
+
+    def _draw_status(self) -> None:
+        if not self._live:
+            return
+        sys.stderr.write("\r\033[K" + self.status_text())
+        sys.stderr.flush()
+        self._status_shown = True
+
+    def _clear_status(self) -> None:
+        if self._status_shown:
+            sys.stderr.write("\r\033[K")
+            sys.stderr.flush()
+            self._status_shown = False

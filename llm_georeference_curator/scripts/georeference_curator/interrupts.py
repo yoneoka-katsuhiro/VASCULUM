@@ -71,12 +71,12 @@ def interruptible(function):
     return run
 
 
-def run_cli_process(args, *, input=None, text=True, capture_output=True, timeout=None, check=False, env=None):
+def run_cli_process(args, *, input=None, text=True, capture_output=True, timeout=None, check=False, env=None, cwd=None):
     """Own each CLI process group so interruption cancels the whole analysis."""
     check_cancelled()
     controller = _active
     child = subprocess.Popen(args, stdin=subprocess.PIPE, stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE, text=text, env=env, start_new_session=os.name == "posix")
+        stderr=subprocess.PIPE, text=text, env=env, cwd=cwd, start_new_session=os.name == "posix")
     if controller:
         with controller.lock:
             controller.children.add(child)

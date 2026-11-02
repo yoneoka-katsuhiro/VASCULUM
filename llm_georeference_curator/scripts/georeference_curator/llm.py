@@ -9,6 +9,7 @@ import re
 import shlex
 import shutil
 import subprocess
+import sys
 import tempfile
 import time
 import urllib.error
@@ -26,12 +27,14 @@ DEFAULT_LLM_PROVIDER = "codex-cli"
 DEFAULT_MODEL_AUTO = "auto"
 DEFAULT_REASONING_EFFORT = "medium"
 PROMPT_VERSION = "point-radius-auto-v1"
+LOGIN_CLI_PROVIDERS = {"codex-cli", "claude-cli"}
 REASONING_EFFORTS = {"none", "low", "medium", "high", "xhigh", "max", "ultra"}
 WEB_SEARCH_MODES = {"live", "cached", "indexed", "disabled"}
-LLM_PROVIDERS = {"openai", "codex-cli", "custom-cli", "opus5", "fable5"}
-PROVIDER_ALIASES = {"codex": "codex-cli", "chatgpt": "codex-cli", "opus": "opus5"}
+LLM_PROVIDERS = {"openai", "codex-cli", "claude-cli", "custom-cli", "opus5", "fable5"}
+PROVIDER_ALIASES = {"codex": "codex-cli", "chatgpt": "codex-cli", "claude": "claude-cli", "opus": "opus5"}
 MODEL_CANDIDATES_BY_PROVIDER = {
     "codex-cli": ("gpt-6.1-sol", "gpt-5.5", "gpt-5.6-sol"),
+    "claude-cli": ("opus",),
     "openai": ("gpt-6.1-sol", "gpt-5.5", "gpt-5.6-sol"),
     "opus5": ("opus5",),
     "fable5": ("fable5",),
@@ -39,6 +42,7 @@ MODEL_CANDIDATES_BY_PROVIDER = {
 }
 MODEL_CANDIDATE_ENVS = {
     "codex-cli": ("CODEX_MODEL_CANDIDATES", "LLM_MODEL_CANDIDATES"),
+    "claude-cli": ("CLAUDE_MODEL_CANDIDATES", "LLM_MODEL_CANDIDATES"),
     "openai": ("OPENAI_MODEL_CANDIDATES", "LLM_MODEL_CANDIDATES"),
     "opus5": ("OPUS_MODEL_CANDIDATES", "LLM_MODEL_CANDIDATES"),
     "fable5": ("FABLE_MODEL_CANDIDATES", "LLM_MODEL_CANDIDATES"),
@@ -46,6 +50,7 @@ MODEL_CANDIDATE_ENVS = {
 }
 MODEL_ENVS = {
     "codex-cli": ("CODEX_MODEL", "LLM_MODEL"),
+    "claude-cli": ("CLAUDE_MODEL", "LLM_MODEL"),
     "openai": ("OPENAI_MODEL", "LLM_MODEL"),
     "opus5": ("OPUS_MODEL", "LLM_MODEL"),
     "fable5": ("FABLE_MODEL", "LLM_MODEL"),
@@ -175,7 +180,7 @@ class LlmSettings:
         if self.provider == "openai":
             return bool(self.api_key)
         command = resolve_cli_command(self)
-        return bool(command) and (self.provider != "codex-cli" or command_available(command))
+        return bool(command) and (self.provider not in LOGIN_CLI_PROVIDERS or command_available(command))
 
 
 def response_schema(settings: LlmSettings):
@@ -275,12 +280,12 @@ def validate_llm_settings(settings: LlmSettings) -> None:
         allowed = ", ".join(sorted(WEB_SEARCH_MODES))
         raise ValueError(f"--llm-web-search must be one of: {allowed}")
     if settings.provider not in LLM_PROVIDERS:
-        raise ValueError("--llm-provider must be one of: codex-cli, codex, openai, opus, opus5, fable5, custom-cli")
+        raise ValueError("--llm-provider must be one of: codex-cli, codex, claude-cli, claude, openai, opus, opus5, fable5, custom-cli")
     if settings.provider == "openai" and settings.mode == "on" and not settings.api_key:
         raise ValueError(f"LLM mode is on, but {settings.api_key_env} is not set.")
     if settings.provider != "openai" and settings.mode == "on":
         command = resolve_cli_command(settings)
-        if not command or (settings.provider == "codex-cli" and not command_available(command)):
+        if not command or (settings.provider in LOGIN_CLI_PROVIDERS and not command_available(command)):
             raise ValueError(f"LLM provider '{settings.provider}' needs an executable. Use --llm-command or put it on PATH.")
 
 
@@ -298,18 +303,12 @@ def preflight_llm(
         return
 
     model_label = selected_model_label(settings)
-    print(
-        f"LLM preflight: provider={settings.provider}, model={model_label}, "
-        f"web_search={settings.web_search_mode}",
-        flush=True,
-    )
     if settings.provider == "codex-cli":
         command = resolve_cli_command(settings)
         if not command or not command_available(command):
             raise RuntimeError(
                 "Codex CLI was not found. Install ChatGPT/Codex CLI or set --llm-command."
             )
-        print(f"LLM preflight: Codex CLI found at {command}", flush=True)
         status = subprocess.run(
             [command, "login", "status"],
             text=True,
@@ -323,13 +322,25 @@ def preflight_llm(
                 "Codex CLI is installed, but it does not appear to be logged in. "
                 "Run `codex login` and then `codex login status`."
             )
-        print("LLM preflight: Codex login OK", flush=True)
+        print(f"LLM check: Codex CLI logged in ({command})", file=sys.stderr, flush=True)
+    elif settings.provider == "claude-cli":
+        command = resolve_cli_command(settings)
+        if not command or not command_available(command):
+            raise RuntimeError("Claude Code CLI was not found. Install Claude Code or set --llm-command.")
+        status = subprocess.run([command, "auth", "status"], text=True, capture_output=True, timeout=30, check=False)
+        try:
+            logged_in = bool(json.loads(status.stdout).get("loggedIn"))
+        except (json.JSONDecodeError, AttributeError):
+            logged_in = False
+        if not logged_in:
+            raise RuntimeError(f"Claude Code CLI is not logged in. Run: {shlex.quote(command)} auth login")
+        print(f"LLM check: Claude Code CLI logged in ({command})", file=sys.stderr, flush=True)
     elif settings.provider == "openai":
         if not settings.api_key:
             raise RuntimeError(
                 f"OpenAI provider needs {settings.api_key_env}. Set it or use --llm-provider codex-cli."
             )
-        print(f"LLM preflight: {settings.api_key_env} is set", flush=True)
+        print(f"LLM check: {settings.api_key_env} is set", file=sys.stderr, flush=True)
     else:
         command = resolve_cli_command(settings)
         if not command:
@@ -337,27 +348,22 @@ def preflight_llm(
                 f"Provider '{settings.provider}' needs a local command. "
                 "Use --llm-command, for example: --llm-command 'opus5 --model {model} --json'."
             )
-        print(f"LLM preflight: local command found for {settings.provider}", flush=True)
+        print(f"LLM check: {settings.provider} command found ({command})", file=sys.stderr, flush=True)
 
     if confirm:
         geospatial_notice = ""
         if external_geospatial_services:
             geospatial_notice = (
-                "After LLM research, source-backed anchor coordinates and nearby "
-                "mapped route, land-use, vegetation, water, coast, and substrate "
-                "features may be requested from public Overpass; candidate coordinates "
-                "may be sent to Open-Meteo for DEM refinement. Images and label "
-                "transcriptions are not sent to those two services.\n"
+                "Candidate coordinates (never images or label text) may also be sent to "
+                "Overpass (OpenStreetMap features) and Open-Meteo (elevation).\n"
             )
         print(
-            "This run will call an LLM and may consume tokens/credits.\n"
-            f"Provider: {settings.provider}\n"
-            f"Model: {model_label}\n"
-            f"Reasoning effort: {settings.reasoning_effort}\n"
-            f"Web search: {settings.web_search_mode}\n"
+            f"This run calls {settings.provider} {model_label} ({settings.reasoning_effort}, web {settings.web_search_mode}) "
+            "and uses your account's tokens or credits.\n"
             f"{geospatial_notice}"
             "Continue? [y/n]: ",
             end="",
+            file=sys.stderr,
             flush=True,
         )
         answer = input().strip().lower()
@@ -665,6 +671,69 @@ class CliJsonClient:
         raise RuntimeError("; ".join(errors) or f"{self.settings.provider} command failed.")
 
 
+class ClaudeCliClient:
+    """Claude Code in print mode, signed in with the user's Claude account (no API key)."""
+
+    def __init__(self, settings: LlmSettings) -> None:
+        self.settings = settings
+        self.request_gate = None
+
+    def tools(self, image_paths) -> str:
+        tools = ["Read"] if image_paths else []
+        if self.settings.task_mode == "georeference" and self.settings.web_search_mode != "disabled":
+            tools += ["WebSearch", "WebFetch"]
+        return ",".join(tools)
+
+    def create_json(self, user_prompt: str, image_paths: Optional[List[Path]] = None, *, deadline=None):
+        deadline = deadline or time.monotonic() + self.settings.timeout_seconds
+        command = resolve_cli_command(self.settings)
+        if not command:
+            raise RuntimeError("Claude Code CLI was not found.")
+        image_paths = list(image_paths or [])
+        prompt = system_prompt_for(self.settings) + "\n\n" + user_prompt
+        if image_paths:
+            prompt += ("\n\nOpen each whole-specimen photograph below with the Read tool before answering:\n"
+                       + "\n".join(str(path) for path in image_paths))
+        tools = self.tools(image_paths)
+        effort = {"none": "low", "ultra": "max"}.get(self.settings.reasoning_effort, self.settings.reasoning_effort)
+        errors = []
+        candidates = model_candidates_for(self.settings)
+        for index, model in enumerate(candidates):
+            args = [command, "-p", "--output-format", "json", "--model", model, "--effort", effort,
+                    "--json-schema", json.dumps(response_schema(self.settings), separators=(",", ":")),
+                    "--tools", tools, "--no-session-persistence", "--strict-mcp-config", "--disable-slash-commands"]
+            if tools:
+                args += ["--allowedTools", tools]
+            for directory in sorted({str(path.parent) for path in image_paths}):
+                args += ["--add-dir", directory]
+            if self.request_gate:
+                self.request_gate()
+            # A neutral working directory keeps project CLAUDE.md files out of the request.
+            with tempfile.TemporaryDirectory() as workdir:
+                completed = run_cli_process(args, input=prompt, text=True, capture_output=True, cwd=workdir,
+                    timeout=remaining_stage_time(self.settings, deadline), check=False)
+            try:
+                payload = json.loads(completed.stdout)
+            except json.JSONDecodeError:
+                payload = {}
+            if completed.returncode != 0 or payload.get("is_error") or not payload:
+                message = f"claude-cli failed with model {model}: {payload.get('result') or completed.stderr.strip() or completed.stdout.strip()}"
+                errors.append(message)
+                if index + 1 < len(candidates) and is_model_selection_error(message):
+                    continue
+                raise RuntimeError(message)
+            parsed = payload.get("structured_output")
+            parsed = dict(parsed) if isinstance(parsed, dict) else parse_json_object(payload.get("result", ""))
+            usage = payload.get("usage") or {}
+            cached = int(usage.get("cache_read_input_tokens") or 0)
+            parsed["_vasculum_model"] = model
+            parsed["_vasculum_usage"] = normalize_token_usage({
+                "input_tokens": int(usage.get("input_tokens") or 0) + cached + int(usage.get("cache_creation_input_tokens") or 0),
+                "cached_input_tokens": cached, "output_tokens": int(usage.get("output_tokens") or 0)})
+            return parsed
+        raise RuntimeError("; ".join(errors) or "claude-cli failed.")
+
+
 class CodexCliClient:
     def __init__(self, settings: LlmSettings) -> None:
         self.settings = settings
@@ -758,10 +827,24 @@ def resolve_cli_command(settings: LlmSettings) -> str:
             if Path(candidate).is_file() and os.access(candidate, os.X_OK):
                 return candidate
         return ""
+    if settings.provider == "claude-cli":
+        return shutil.which("claude") or bundled_claude_cli()
     if settings.provider == "opus5":
         return shutil.which("opus5") or shutil.which("opus") or ""
     if settings.provider == "fable5":
         return shutil.which("fable5") or ""
+    return ""
+
+
+def bundled_claude_cli() -> str:
+    """Claude Code shipped inside the Claude desktop app, newest version first."""
+    for pattern in (".local/bin/claude", ".claude/local/claude",
+                    "Library/Application Support/Claude/claude-code/*/*/claude.app/Contents/MacOS/claude"):
+        matches = sorted(Path.home().glob(pattern), key=lambda path: [int(part) if part.isdigit() else part
+                         for part in re.split(r"[./]", str(path))], reverse=True)
+        for path in matches:
+            if path.is_file() and os.access(path, os.X_OK):
+                return str(path)
     return ""
 
 
@@ -776,9 +859,10 @@ def make_client(settings: LlmSettings):
         return None
     if settings.provider == "openai":
         return OpenAIResponsesClient(settings) if settings.api_key else None
-    if settings.provider == "codex-cli":
+    if settings.provider in LOGIN_CLI_PROVIDERS:
         command = resolve_cli_command(settings)
-        return CodexCliClient(settings) if command and command_available(command) else None
+        client = CodexCliClient if settings.provider == "codex-cli" else ClaudeCliClient
+        return client(settings) if command and command_available(command) else None
     return CliJsonClient(settings) if resolve_cli_command(settings) else None
 
 

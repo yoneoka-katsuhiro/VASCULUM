@@ -17,12 +17,14 @@ fi
 python3 -m venv .venv
 
 if grep -Eq '^[[:space:]]*[^#[:space:]]' requirements.txt; then
-  .venv/bin/python -m pip install -r requirements.txt
+  PIP_DISABLE_PIP_VERSION_CHECK=1 .venv/bin/python -m pip install -q -r requirements.txt
 fi
 
 mkdir -p .Rlibrary
 R_LIBS_USER="${SCRIPT_DIR}/.Rlibrary${R_LIBS_USER:+:${R_LIBS_USER}}" Rscript --vanilla -e \
   'p <- c("ggplot2", "ggalluvial"); missing <- p[!vapply(p, requireNamespace, logical(1), quietly=TRUE)]; if(length(missing)) install.packages(missing, lib=.libPaths()[1], repos="https://cloud.r-project.org"); stopifnot(all(vapply(p, requireNamespace, logical(1), quietly=TRUE)))'
 
-echo "llm_georeference_curator setup complete."
-echo "Run: ${SCRIPT_DIR}/run_llm_georeference_curator.sh --help"
+if [[ -z "${VASCULUM_SETUP_QUIET:-}" ]]; then
+  echo "llm_georeference_curator setup complete."
+  echo "Run: ${SCRIPT_DIR}/run_llm_georeference_curator.sh --help"
+fi

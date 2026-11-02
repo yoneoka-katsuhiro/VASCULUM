@@ -246,6 +246,7 @@ class RunReport:
     max_uncertainty_meters: Optional[float] = None
     accepted: int = 0
     confidence_counts: dict = field(default_factory=dict)
+    median_uncertainty_meters: Optional[float] = None
     failed: int = 0
     resumed_records: int = 0
     checkpoint_path: str = ""

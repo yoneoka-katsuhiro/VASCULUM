@@ -18,11 +18,13 @@ if ! "${VENV_DIR}/bin/python" -m pip --version >/dev/null 2>&1; then
 fi
 
 PIP_DISABLE_PIP_VERSION_CHECK=1 \
-  "${VENV_DIR}/bin/python" -m pip install -r "${PROJECT_DIR}/requirements.txt"
+  "${VENV_DIR}/bin/python" -m pip install -q -r "${PROJECT_DIR}/requirements.txt"
 
-echo
-echo "Setup finished."
-echo "Next commands:"
-echo "  cp .env.example .env"
-echo "  # edit .env and set CONTACT_EMAIL"
-echo "  bash run_checklist.sh --dry-run --country Japan --taxon Ferns"
+if [[ -z "${VASCULUM_SETUP_QUIET:-}" ]]; then
+  echo
+  echo "Setup finished."
+  echo "Next commands:"
+  echo "  cp .env.example .env"
+  echo "  # edit .env and set CONTACT_EMAIL"
+  echo "  bash run_checklist.sh --dry-run --country Japan --taxon Ferns"
+fi

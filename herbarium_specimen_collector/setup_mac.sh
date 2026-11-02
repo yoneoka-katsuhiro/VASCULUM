@@ -18,10 +18,12 @@ if ! "${VENV_DIR}/bin/python" -m pip --version >/dev/null 2>&1; then
 fi
 
 PIP_DISABLE_PIP_VERSION_CHECK=1 \
-  "${VENV_DIR}/bin/python" -m pip install -r "${PROJECT_DIR}/requirements.txt"
+  "${VENV_DIR}/bin/python" -m pip install -q -r "${PROJECT_DIR}/requirements.txt"
 
-echo
-echo "Setup finished."
-echo "Next commands:"
-echo "  bash run_collect_specimens.sh --dry-run"
-echo "  bash run_collect_specimens.sh"
+if [[ -z "${VASCULUM_SETUP_QUIET:-}" ]]; then
+  echo
+  echo "Setup finished."
+  echo "Next commands:"
+  echo "  bash run_collect_specimens.sh --dry-run"
+  echo "  bash run_collect_specimens.sh"
+fi

@@ -11,8 +11,12 @@ from .geocoding import haversine_km, parse_decimal, valid_lat_lon
 from .inputs import read_table
 
 
-UNKNOWN_DATUM_ALLOWANCE_METERS = 5000
+# Policy allowance for a blank datum: shifts between WGS84 and the legacy datums
+# common on Asian labels (Tokyo, Beijing 1954, Indian 1975, TWD67) are typically under 1 km.
+UNKNOWN_DATUM_ALLOWANCE_METERS = 1000
 UNSTATED_POSITION_ALLOWANCE_METERS = 1000
+# Existing points coarser than this (for example whole arc-minutes) are re-estimated from the label photograph.
+COARSE_COORDINATE_METERS = 1000
 
 
 def positive_number(value):
@@ -82,16 +86,44 @@ def in_bounds(latitude, longitude, south, west, north, east):
     return south <= latitude <= north and longitude_inside
 
 
+def decimal_half_step(value):
+    return float(Decimal(10) ** Decimal(str(value)).as_tuple().exponent) * 0.5
+
+
+def sexagesimal_offset(value, units_per_degree):
+    """Distance in degrees to the nearest 1/units grid line, if the printed decimals allow it."""
+    number = Decimal(str(value))
+    scaled = number * units_per_degree
+    nearest = scaled.to_integral_value()
+    tolerance = Decimal(units_per_degree) * Decimal("0.5") * Decimal(10) ** number.as_tuple().exponent
+    if abs(scaled - nearest) > tolerance:
+        return None
+    return float(abs(number - nearest / units_per_degree))
+
+
+def coordinate_half_steps(latitude_text, longitude_text):
+    # Decimal degrees converted from degree-minute(-second) records keep the
+    # sexagesimal step: 23.51667, 120.8 is 23°31′, 120°48′ (±0.5′), not ±0.05°.
+    texts = (str(latitude_text), str(longitude_text))
+    decimals = [-Decimal(text).as_tuple().exponent for text in texts]
+    # Try the coarser grid first: a whole-minute value also lies on the arc-second grid.
+    for units, signature_decimals in ((60, 3), (3600, 4)):
+        offsets = [sexagesimal_offset(text, units) for text in texts]
+        if all(offset is not None for offset in offsets) and any(
+                places >= signature_decimals and Decimal(text) % 1 != 0
+                for text, places in zip(texts, decimals)):
+            return tuple(0.5 / units + offset for offset in offsets)
+    return tuple(decimal_half_step(text) for text in texts)
+
+
 def rounding_radius(latitude_text, longitude_text):
-    def half_step(value):
-        return float(Decimal(10) ** Decimal(str(value)).as_tuple().exponent) * 0.5
     latitude = parse_decimal(latitude_text)
     if latitude is None:
         return None
     try:
-        latitude_step = half_step(latitude_text)
+        latitude_step, longitude_step = coordinate_half_steps(latitude_text, longitude_text)
         north = 111700 * latitude_step
-        east = 111320 * abs(math.cos(math.radians(max(0, abs(latitude) - latitude_step)))) * half_step(longitude_text)
+        east = 111320 * abs(math.cos(math.radians(max(0, abs(latitude) - latitude_step)))) * longitude_step
     except (InvalidOperation, ValueError, OverflowError):
         return None
     return max(1, math.ceil(math.hypot(north, east)))
