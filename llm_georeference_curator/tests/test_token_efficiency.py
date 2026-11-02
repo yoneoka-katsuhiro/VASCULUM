@@ -88,6 +88,7 @@ class TokenEfficiencyTests(unittest.TestCase):
         settings = LlmSettings(model="gpt-6.1-sol", task_mode="transcription_only", web_search_mode="disabled")
 
         def fake_run(args, **kwargs):
+            self.assertEqual(args[0], "/test/bin/codex")
             self.assertIn("--json", args)
             self.assertNotIn("--ignore-rules", args)
             self.assertNotIn("--dangerously-bypass-approvals-and-sandbox", args)
@@ -99,8 +100,10 @@ class TokenEfficiencyTests(unittest.TestCase):
             Path(args[args.index("-o") + 1]).write_text('{"status":"ok","labelTranscription":"Mount Example"}')
             return subprocess.CompletedProcess(args, 0, json.dumps({"type": "turn.completed", "usage": {"input_tokens": 99, "output_tokens": 12}}), "")
 
-        with patch("georeference_curator.llm.subprocess.run", side_effect=fake_run):
-            response = CodexCliClient(settings).create_json("Read this label")
+        with patch("georeference_curator.llm.resolve_cli_command", return_value="/test/bin/codex") as resolve_command:
+            with patch("georeference_curator.llm.subprocess.run", side_effect=fake_run):
+                response = CodexCliClient(settings).create_json("Read this label")
+        resolve_command.assert_called_once_with(settings)
         self.assertEqual(response["_vasculum_usage"]["output_tokens"], 12)
 
     def test_responses_api_stage_contract(self):
