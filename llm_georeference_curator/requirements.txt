@@ -1,2 +1,3 @@
 # PROJ supplies audited coordinate-reference-system transformations.
 pyproj>=3.6,<4
+shapely>=2,<3

@@ -27,7 +27,12 @@ def implementation_signature(directory):
         crs_runtime = {"pyproj": pyproj.__version__, "PROJ": pyproj.proj_version_str}
     except ImportError:
         crs_runtime = {"pyproj": "unavailable"}
-    return {"python": platform.python_version(), "files": files, "crsRuntime": crs_runtime}
+    try:
+        import shapely
+        geometry_runtime = {"shapely": shapely.__version__, "GEOS": shapely.geos_version_string}
+    except ImportError:
+        geometry_runtime = {"shapely": "unavailable"}
+    return {"python": platform.python_version(), "files": files, "crsRuntime": crs_runtime, "geometryRuntime": geometry_runtime}
 
 
 class RecordJournal:

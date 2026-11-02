@@ -29,8 +29,9 @@ from georeference_curator.sources import SourceAuditor, public_url
 
 class PolicyTests(unittest.TestCase):
     def test_crs_conversion_and_unknown_datum(self):
-        with self.assertRaises(ValueError):
-            to_wgs84(23.5, 120.5, "")
+        assumed = to_wgs84(23.5, 120.5, "")
+        self.assertEqual(assumed.accuracy_meters, 5000)
+        self.assertIn("datum not stated; assumed WGS84", assumed.assumption)
         wgs = to_wgs84(23.5, 120.5, "EPSG:4326")
         self.assertEqual(wgs.latitude, 23.5)
         tokyo = to_wgs84(35.5, 139.5, "Tokyo datum")
@@ -44,9 +45,9 @@ class PolicyTests(unittest.TestCase):
     def test_reference_regions_are_checks_not_coordinate_constraints(self):
         options = SelectionOptions(reference_regions=[dict(country="Japan", source="regional-survey", bounds=[30, 130, 34, 134])])
         result = select(row=trusted_row(), options=options)
-        self.assertEqual(result.curation_status, "review")
-        self.assertEqual(result.row["decimalLatitude"], "35.123456")
-        self.assertIn("outside supplied", result.row["georeferenceRemarks"])
+        self.assertEqual(result.curation_status, "excluded")
+        self.assertEqual(result.original_coordinates["decimalLatitude"], "35.123456")
+        self.assertIn("could not be repaired", result.row["georeferenceRemarks"])
 
     def test_geometry_uncertainty_and_numeric_precision(self):
         geometry = json.dumps(dict(type="bbox", coordinates=[35, 138, 35.1, 138.1]))
@@ -95,9 +96,11 @@ class PolicyTests(unittest.TestCase):
         candidate = gazetteer_coordinate_candidates([GazetteerMatch(entry, 1, "verified survey")], LabelRead())[0]
         self.assertNotEqual(candidate.uncertainty_basis, "verified_reference_extent")
 
-    def test_conflicting_labels_never_start_coordinate_research(self):
+    def test_partial_conflicting_labels_still_produce_low_confidence_estimate(self):
         class Client:
             def create_json(self, *_args, **_kwargs):
+                if not _kwargs.get("image_paths"):
+                    return dict(status="accepted", coordinateCandidates=[dict(latitude="35.123456", longitude="138.123456", uncertaintyMeters="10000", geodeticDatum="WGS84")])
                 return dict(status="conflict", labelTranscription="Two different collecting events",
                             localityText="Mt Example trail", detectedLanguages=["en"],
                             elevationText="", collectorText="", eventDateText="", remarks="different labels")
@@ -109,9 +112,9 @@ class PolicyTests(unittest.TestCase):
             write_rows(root / "input" / "dwc.tsv", [dict(catalogNumber="A", associatedMedia="images/A.jpg")])
             with patch("georeference_curator.llm.resolve_cli_command", return_value="/test/bin/codex"), patch("georeference_curator.llm.command_available", return_value=True), patch("georeference_curator.pipeline.make_client", return_value=Client()), patch("georeference_curator.pipeline.preflight_llm"):
                 report = run_pipeline(**pipeline_options(root, llm_mode="on"))
-            self.assertEqual(report.review, 1)
-            self.assertEqual(report.records_written, 0)
-            self.assertEqual(report.llm_georeference_requests, 0)
+            self.assertEqual(report.records_written, 1)
+            self.assertEqual(report.confidence_counts.get("low"), 1)
+            self.assertEqual(report.llm_georeference_requests, 1)
 
     def test_ambiguous_manual_label_keys_stop_before_LLM_work(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -153,7 +156,7 @@ class PolicyTests(unittest.TestCase):
         gate = RateLimitBackoff(max_calls=1)
         client = CodexCliClient(LlmSettings())
         client.request_gate = gate.reserve_call
-        with patch.dict("os.environ", {}, clear=True), patch("georeference_curator.llm.resolve_cli_command", return_value="/test/bin/codex"), patch("georeference_curator.llm.subprocess.run", return_value=subprocess.CompletedProcess([], 1, "", "model not found")) as runner:
+        with patch.dict("os.environ", {}, clear=True), patch("georeference_curator.llm.resolve_cli_command", return_value="/test/bin/codex"), patch("georeference_curator.llm.run_cli_process", return_value=subprocess.CompletedProcess([], 1, "", "model not found")) as runner:
             with self.assertRaisesRegex(RuntimeError, "budget reached"):
                 client.create_json("test")
         self.assertEqual(runner.call_count, 1)
@@ -169,7 +172,7 @@ class PolicyTests(unittest.TestCase):
         apply_llm_label_fields(label, {"status": "unreadable", "detectedLanguages": ["ja"], "labelTranscription": "", "localityText": ""})
         self.assertEqual(label.label_status, "image_unreadable")
         result = select(row={"country": "Japan"}, label=label, insufficient="country_only")
-        self.assertNotEqual(result.curation_status, "excluded")
+        self.assertEqual(result.curation_status, "excluded")
 
     def test_image_change_invalidates_completed_record(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -189,7 +192,7 @@ class PolicyTests(unittest.TestCase):
             calls = 0
             def create_json(self, *_args, **_kwargs):
                 self.calls += 1
-                return {"status": "ok", "coordinateCandidates": [], "_vasculum_usage": {"input_tokens": 100, "output_tokens": 10}}
+                return {"status": "accepted", "coordinateCandidates": [dict(latitude="35.123456", longitude="138.123456", uncertaintyMeters="1000", geodeticDatum="WGS84")], "_vasculum_usage": {"input_tokens": 100, "output_tokens": 10}}
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             write_rows(root / "input" / "dwc.tsv", [dict(catalogNumber="A", country="Japan", locality="Mt Example trail")])

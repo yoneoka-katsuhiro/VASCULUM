@@ -126,7 +126,7 @@ class HabitatReviewTests(unittest.TestCase):
                 dict(catalogNumber="LLM", labelTranscription="Specific mountain", localityText="Specific mountain"),
             ], input_dir=source)
             all_results = []
-            with patch.dict("os.environ", {"PATH": os.environ.get("PATH", os.defpath)}, clear=True), patch("georeference_curator.llm.command_available", return_value=True), patch("georeference_curator.pipeline.make_client", return_value=Client()), patch("georeference_curator.pipeline.preflight_llm"), patch("georeference_curator.pipeline.review_selected_habitat", side_effect=advisory_review), patch("georeference_curator.pipeline.selected_dem_elevation", return_value=None):
+            with patch.dict("os.environ", {"PATH": os.environ.get("PATH", os.defpath)}, clear=True), patch("georeference_curator.llm.resolve_cli_command", return_value="/test/bin/codex"), patch("georeference_curator.llm.command_available", return_value=True), patch("georeference_curator.pipeline.make_client", return_value=Client()), patch("georeference_curator.pipeline.preflight_llm"), patch("georeference_curator.pipeline.review_selected_habitat", side_effect=advisory_review), patch("georeference_curator.pipeline.selected_dem_elevation", return_value=None):
                 for habitat in ("", "subalpine forest", "sea"):
                     destination = root / (habitat or "no_habitat")
                     report = run_pipeline(
@@ -143,13 +143,13 @@ class HabitatReviewTests(unittest.TestCase):
                     )
                     with (destination / "modified_dwc.tsv").open() as handle:
                         rows = list(csv.DictReader(handle, delimiter="\t"))
-                    self.assertEqual(report.records_written, 2)
+                    self.assertEqual(report.records_written, 3)
                     all_results.append([(row["decimalLatitude"], row["decimalLongitude"], row["coordinateUncertaintyInMeters"]) for row in rows])
                     log = [json.loads(line) for line in (destination / "georeference.log.jsonl").read_text().splitlines()]
                     if habitat:
                         self.assertTrue(all(entry["habitatReview"]["status"] == "warning" for entry in log))
                         self.assertEqual(report.habitat_review_warnings, 3)
-                        self.assertEqual(report.accepted, 2)
+                        self.assertEqual(report.accepted, 3)
                         self.assertEqual(report.llm_georeference_requests, 0)
                     else:
                         self.assertTrue(all(not entry["habitatReview"] for entry in log))
@@ -157,7 +157,7 @@ class HabitatReviewTests(unittest.TestCase):
                     self.assertEqual([entry["decision"] for entry in log], ["keep_original", "infer_missing", "infer_missing"])
                     selected_scores = [entry["selectedCandidate"]["score"] for entry in log]
                     self.assertEqual(selected_scores, ["", "", "0.80"])
-                    self.assertEqual([entry["includeInDwc"] for entry in log], [True, True, False])
+                    self.assertEqual([entry["includeInDwc"] for entry in log], [True, True, True])
             self.assertEqual(all_results[0], all_results[1])
             self.assertEqual(all_results[0], all_results[2])
 

@@ -72,7 +72,8 @@ class CoordinateCandidate:
     original_longitude: str = ""
     original_datum: str = ""
     route_support: str = ""
-    curation_status: str = "review"
+    curation_status: str = "failed"
+    confidence: str = "low"
     curation_reasons: str = ""
     candidate_elevation_meters: str = ""
     candidate_type: str = ""
@@ -135,6 +136,7 @@ class CoordinateCandidate:
             ("originalGeodeticDatum", "original_datum"),
             ("routeSupport", "route_support"),
             ("curationStatus", "curation_status"),
+            ("confidence", "confidence"),
             ("curationReasons", "curation_reasons"),
             ("candidateElevationMeters", "candidate_elevation_meters"),
             ("candidateType", "candidate_type"),
@@ -176,7 +178,7 @@ class CuratedResult:
     exclusion_reason: str = ""
     llm_usage: List[dict] = field(default_factory=list)
     habitat_review: dict = field(default_factory=dict)
-    curation_status: str = "unresolved"
+    curation_status: str = "failed"
     original_coordinates: dict = field(default_factory=dict)
     provenance: dict = field(default_factory=dict)
     stage_errors: List[dict] = field(default_factory=list)
@@ -218,8 +220,6 @@ class RunReport:
     kept_original: int = 0
     corrected_existing: int = 0
     inferred_missing: int = 0
-    unresolved: int = 0
-    review_required: int = 0
     excluded: int = 0
     excluded_insufficient_locality: int = 0
     excluded_manual_misidentification: int = 0
@@ -245,7 +245,7 @@ class RunReport:
     errors: List[str] = field(default_factory=list)
     max_uncertainty_meters: Optional[float] = None
     accepted: int = 0
-    review: int = 0
+    confidence_counts: dict = field(default_factory=dict)
     failed: int = 0
     resumed_records: int = 0
     checkpoint_path: str = ""

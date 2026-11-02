@@ -61,6 +61,7 @@ echo "Running georeference curator offline tests..."
 "${CURATOR_PYTHON}" "${CURATOR_DIR}/tests/test_personal_inputs.py"
 "${CURATOR_PYTHON}" "${CURATOR_DIR}/tests/test_manual_review.py"
 "${CURATOR_PYTHON}" "${CURATOR_DIR}/tests/test_ribbon.py"
+"${CURATOR_PYTHON}" "${CURATOR_DIR}/tests/test_auto_acceptance.py"
 
 echo "Checking CLI entry points..."
 bash "${COLLECTOR_DIR}/run_collect_specimens.sh" --help >/dev/null

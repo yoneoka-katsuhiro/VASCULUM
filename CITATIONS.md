@@ -22,6 +22,9 @@ Georeferencing and environmental context services:
 - [Overpass API](https://wiki.openstreetmap.org/wiki/Overpass_API)
 - [Open-Meteo Elevation API](https://open-meteo.com/en/docs/elevation-api)
 - [Copernicus DEM](https://doi.org/10.5270/ESA-c5d3d65)
+- [Natural Earth](https://www.naturalearthdata.com/) v5.1.2 source tag, used for
+  conservative offline geographic screening; public domain. Original file URLs
+  and hashes are recorded in llm_georeference_curator/data/geographic_screen.json.
 
 LLM-assisted runs should also record and cite the selected provider, model,
 and access date. These values are retained in the curator outputs and logs.
@@ -49,6 +52,8 @@ Georeferencing guidance and scientific plotting:
   installed package citation. The bundled R source is the sole ribbon renderer.
 - Coordinate transformations use [pyproj/PROJ](https://pyproj4.github.io/pyproj/stable/).
   Runtime versions and the transformation operation are recorded in curator audit outputs.
+- Geographic geometry operations use [Shapely](https://shapely.readthedocs.io/).
+  Shapely/GEOS versions are recorded in the implementation signature.
 
 CheckList outputs also include provenance tables for the GBIF, CVH, and
 OpenStreetMap records used to build the visual checklist. See

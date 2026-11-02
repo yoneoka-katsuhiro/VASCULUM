@@ -32,7 +32,7 @@ class ManualReviewTests(unittest.TestCase):
             self.assertEqual(report.excluded_manual_misidentification, 1)
             self.assertEqual(report.records_written, 0)
             self.assertEqual(report.llm_attempted, 0)
-            self.assertEqual(report.unresolved, 0)
+            self.assertEqual(report.failed, 0)
             self.assertTrue(marked.exists())
             self.assertEqual(read_rows(root / "out" / "modified_dwc.tsv"), [])
             candidate = read_rows(root / "out" / "georeference_candidates.tsv")[0]

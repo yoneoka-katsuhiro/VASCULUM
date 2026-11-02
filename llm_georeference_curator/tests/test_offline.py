@@ -152,24 +152,25 @@ class OfflineTests(unittest.TestCase):
     def test_label_precision_not_accuracy(self):
         raw = extract_decimal_coordinates("WGS84 23°31′22″ N, 120°48′30″ E")
         self.assertTrue(is_precise_label_coordinate(raw[0]))
-        self.assertFalse(is_precise_label_coordinate(extract_decimal_coordinates("23°31′22″ N, 120°48′30″ E")[0]))
+        self.assertTrue(is_precise_label_coordinate(extract_decimal_coordinates("23°31′22″ N, 120°48′30″ E")[0]))
         review = select(coordinates=raw)
         self.assertEqual(review.row["decimalLatitude"], "23.522778")
-        self.assertEqual(review.row["coordinateUncertaintyInMeters"], "")
-        self.assertFalse(review.include_in_dwc)
+        self.assertEqual(review.row["coordinateUncertaintyInMeters"], "1030")
+        self.assertTrue(review.include_in_dwc)
+        self.assertEqual(review.row["confidence"], "low")
         accepted = select(coordinates=raw, options=SelectionOptions(label_coordinate_uncertainty_meters=30))
         self.assertEqual(accepted.curation_status, "accepted")
         self.assertTrue(accepted.include_in_dwc)
         self.assertEqual(accepted.row["coordinateUncertaintyInMeters"], "60")
 
-    def test_original_requires_provenance_datum_uncertainty(self):
+    def test_original_accepts_plausible_coordinates_with_explicit_allowances(self):
         self.assertEqual(original_coordinate_status(trusted_row()), "trusted")
         for changes, expected in (
-            ({"geodeticDatum": ""}, "datum_unresolved"),
-            ({"coordinateUncertaintyInMeters": ""}, "uncertainty_unknown"),
-            ({"decimalLatitude": "35.1", "decimalLongitude": "138.1"}, "uncertainty_below_rounding"),
-            ({"georeferenceProtocol": "not GPS"}, "unverified"),
-            ({"georeferenceProtocol": ""}, "unverified"),
+            ({"geodeticDatum": ""}, "trusted"),
+            ({"coordinateUncertaintyInMeters": ""}, "trusted"),
+            ({"decimalLatitude": "35.1", "decimalLongitude": "138.1"}, "trusted"),
+            ({"georeferenceProtocol": "not GPS"}, "trusted"),
+            ({"georeferenceProtocol": ""}, "trusted"),
             ({"decimalLatitude": "0", "decimalLongitude": "0"}, "zero_placeholder"),
             ({"decimalLatitude": "nan"}, "missing"),
         ):
@@ -192,27 +193,29 @@ class OfflineTests(unittest.TestCase):
         self.assertEqual(result.row["minimumElevationInMeters"], "2290")
         self.assertIn("vertical_accuracy_not_guaranteed", result.row["georeferenceRemarks"])
 
-    def test_llm_confidence_is_not_acceptance(self):
+    def test_llm_radius_is_accepted_without_claiming_human_verification(self):
         candidates = llm_response_to_candidates({"coordinateCandidates": [
             {"latitude": "35.123456", "longitude": "138.123456", "geodeticDatum": "WGS84", "uncertaintyMeters": "5", "score": "1.0", "candidateType": "refined_georeference"},
         ]}, LabelRead(), "test")
         result = select(candidates=candidates)
-        self.assertEqual(result.curation_status, "review")
-        self.assertFalse(result.include_in_dwc)
-        self.assertEqual(result.row["coordinateUncertaintyInMeters"], "")
+        self.assertEqual(result.curation_status, "accepted")
+        self.assertTrue(result.include_in_dwc)
+        self.assertEqual(result.row["coordinateUncertaintyInMeters"], "5")
+        self.assertEqual(result.row["georeferenceVerificationStatus"], "unverified")
         self.assertEqual(candidates[0].reported_uncertainty_meters, "5")
 
     def test_uncertainty_limit_and_documented_conflicts(self):
         result = select(row=trusted_row(), options=SelectionOptions(max_uncertainty_meters=20))
         self.assertFalse(result.include_in_dwc)
-        raw = extract_decimal_coordinates("WGS84 N 25.123456 E 121.123456")
+        raw = extract_decimal_coordinates("WGS84 N 35.543210 E 138.543210")
         result = select(row=trusted_row(), coordinates=raw, options=SelectionOptions(label_coordinate_uncertainty_meters=30))
-        self.assertEqual(result.curation_status, "review")
+        self.assertEqual(result.curation_status, "accepted")
+        self.assertEqual(result.row["confidence"], "low")
         self.assertTrue(any("Conflicting" in note for note in result.notes))
 
     def test_insufficient_locality_and_unread_images_are_distinct(self):
-        unknown = select(row={"country": "China"}, label=LabelRead(image_path="not-read.jpg", label_status="image_not_transcribed"), insufficient="country_only")
-        self.assertEqual(unknown.curation_status, "unresolved")
+        unknown = select(row={"country": "China"}, label=LabelRead(image_path="not-read.jpg", label_status="image_not_transcribed"))
+        self.assertEqual(unknown.curation_status, "failed")
         self.assertFalse(unknown.include_in_dwc)
         broad = select(row={"country": "China"}, label=LabelRead(label_status="llm_image_transcribed"), insufficient="country_only")
         self.assertEqual(broad.curation_status, "excluded")
@@ -263,19 +266,19 @@ class OfflineTests(unittest.TestCase):
             self.assertEqual(dry.records_read, 3)
             self.assertFalse((root / "out").exists())
             first = run_pipeline(**args)
-            self.assertEqual(first.records_written, 1)
-            self.assertEqual([row["catalogNumber"] for row in read_rows(root / "out" / "modified_dwc.tsv")], ["GPS"])
-            self.assertEqual(first.accepted, 1)
-            self.assertEqual(first.excluded_missing_source_image, 2)
+            self.assertEqual(first.records_written, 2)
+            self.assertEqual([row["catalogNumber"] for row in read_rows(root / "out" / "modified_dwc.tsv")], ["GPS", "REVIEW"])
+            self.assertEqual(first.accepted, 2)
+            self.assertEqual(first.excluded_missing_source_image, 1)
             self.assertEqual(set(path.name for path in (root / "out").iterdir()), {"modified_dwc.csv", "modified_dwc.tsv", "georeference_candidates.tsv", "summary.txt", "georeference.log.jsonl", "georeference_flow.pdf"})
             second = run_pipeline(**args)
             self.assertEqual(second.resumed_records, 3)
-            self.assertEqual(second.records_written, 1)
+            self.assertEqual(second.records_written, 2)
             log = [json.loads(line) for line in (root / "out" / "georeference.log.jsonl").read_text().splitlines()]
             self.assertIn("originalCoordinates", log[0])
             self.assertTrue(log[0]["provenance"]["checkpointReused"])
             self.assertEqual(len(log), 3)
-            self.assertEqual([entry["includeInDwc"] for entry in log], [True, False, False])
+            self.assertEqual([entry["includeInDwc"] for entry in log], [True, True, False])
             self.assertIn("Final DwC policy: accepted records only", (root / "out" / "summary.txt").read_text())
 
 

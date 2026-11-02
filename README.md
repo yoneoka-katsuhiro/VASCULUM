@@ -1,10 +1,10 @@
 # VASCULUM
 
-Version: `v0.1.15`
+Version: `v0.1.16`
 
-[Release notes](RELEASE_NOTES_v0.1.15.md) describe the georeferencing, personal-input
-and human specimen-review updates in this release.
-See the [validation record](VALIDATION_v0.1.15.md) for checks performed and
+[Release notes](RELEASE_NOTES_v0.1.16.md) describe automatic point-radius adoption,
+confidence, cache compatibility and whole-run interruption fixes.
+See the [validation record](VALIDATION_v0.1.16.md) for checks performed and
 scientific claims that have not been validated.
 
 Repository: <https://github.com/yoneoka-katsuhiro/VASCULUM>
@@ -28,12 +28,12 @@ Voucher Archive Search and Curation for Unified Large-scale Use of Metadata
 | Directory | Purpose |
 | --- | --- |
 | `herbarium_specimen_collector/` | Retrieve and integrate Darwin Core (DwC)-oriented herbarium specimen datasets and associated specimen images from multiple digital archives. |
-| `llm_georeference_curator/` | Preserve documented coordinates or perform LLM-assisted georeferencing from linked specimen photographs, with auditable evidence and coordinate candidates. |
+| `llm_georeference_curator/` | Adopt plausible existing coordinates or determine the best point-radius estimate from specimen photographs, recording confidence and auditable evidence. |
 | `checklist/` | Build species lists from geographic conditions and generate visual checklist PDFs from herbarium specimen records and images. |
 
 ## Setup
 
-Use the v0.1.15 ZIP distribution archive. It expands to a clean
+Use the v0.1.16 ZIP distribution archive. It expands to a clean
 `VASCULUM/` directory. Once published, release assets are available from GitHub Releases.
 
 ```bash
@@ -63,9 +63,10 @@ records that represent the same physical specimen, downloads linked specimen
 images, and writes DwC-oriented exports.
 
 The LLM-assisted georeference curator reads those collector exports, preserves
-reliable original coordinates, adds reviewable coordinate candidates, excludes
-records with insufficient locality evidence, and writes modified DwC exports
-for downstream analysis.
+plausible original coordinates or determines a best point-radius estimate.
+The only record states are accepted/excluded and technical failed. Doubt is
+represented by confidence and uncertainty rather than review/unresolved queues.
+All final records are unverified until checked by the user.
 
 ### Visual Review Of Specimen Identity
 
@@ -92,7 +93,7 @@ Use curator `--export-images` to build a final `images/` folder containing only
 included specimens alongside the modified DwC. No marked image or photo of a
 marked specimen is copied there. Reruns synchronize previously managed copies,
 including removal of an earlier copy after you mark its input photograph.
-See [manual exclusion instructions](llm_georeference_curator/README.md#remove-misidentifications-visually).
+See [manual exclusion instructions](llm_georeference_curator/README.md#personal-specimens-and-identity-checks).
 
 The CheckList pipeline reverse-searches species from a country or
 coordinate-radius condition, selects representative herbarium specimen images,
@@ -181,7 +182,7 @@ herbarium_specimen_collector/output/<run>/personal/images/MY0001__label.jpg
 ```
 
 These are included automatically. Photo-only groups become personal records;
-DwC-only records are retained only when existing coordinates are trusted.
+DwC-only records are retained when existing coordinates pass plausibility checks.
 New coordinate estimates require a linked local photograph. Both whole images in a
 named group are passed to label reading. External collections can be added
 with repeatable curator `--additional-input PATH`. Personal input provenance
@@ -191,7 +192,7 @@ Editing the main DwC also works, but choose `--input-dwc PATH` if generated
 TSV and CSV now differ. Prefer a separate personal input because the collector
 can regenerate its main tables. Use wrapper `--pause-before-curation` to wait
 for manual additions between collection and curation. See the
-[personal-input instructions](llm_georeference_curator/README.md#add-your-own-specimens-before-curation)
+[personal-input instructions](llm_georeference_curator/README.md#personal-specimens-and-identity-checks)
 for identifiers, image grouping, duplicate checks and examples.
 
 ### Research Reproducibility
@@ -200,9 +201,11 @@ The georeferencing core is inspired by
 [Xie et al. (2025)](https://doi.org/10.1038/s41477-025-02162-y), while image
 transcription, geographic research and advisory ecological checks are explicit
 VASCULUM extensions. This is not an exact replication of the original experiment.
-There is one input policy: keep trusted original coordinates; otherwise require
-and read the source photograph. Unreadable/broad labels do not fall back to
-DwC locality text. No-photo records with untrusted/missing coordinates are excluded.
+There is one input policy: retain plausible original coordinates without LLM
+work; otherwise read the photograph and georeference the finest legible place.
+County/township/village/mountain/river localities remain eligible even if the
+exact collecting site or part of the text is unknown. Unknown datum and
+positional error use explicit policy allowances, not a holding state.
 
 Reproducibility and later auditing are design requirements: preserve the input
 DwC/images, six primary outputs and private response/snapshot caches. Logs
@@ -210,13 +213,17 @@ record before/after coordinates, actual models, complete prompts, timestamps,
 code/input/image hashes, sources and stage errors. Completed-record checkpoints
 allow cached replay. Fresh LLM calls and changing web sources are not guaranteed
 to reproduce identical answers. See the
-[photo-first methodology](llm_georeference_curator/docs/methodology.md).
+[point-radius methodology](llm_georeference_curator/docs/methodology.md).
 
 Six-decimal coordinates do not imply sub-meter accuracy. The study's reported
 error statistic is not an individual 10 km guarantee, and this extension has
 not yet demonstrated improved positional accuracy on an independent benchmark.
 The final DwC always exports accepted records only, without a mode switch;
-model-only estimates remain review proposals until their locality support, datum and uncertainty are justified.
+LLM-estimated uncertainty is allowed. Accepted means machine-adopted, with
+qualitative confidence, not independently validated. georeferenceVerificationStatus
+is unverified for final user checks. --max-uncertainty-meters is optional and
+has no default upper limit. Reuse the old transcription cache when upgrading;
+Ctrl-C stops all provider processes/workers with exit code 130.
 
 The collector and curator can be connected with `run_collect_and_georeference.sh`
 when a single combined command is useful, but the two workflows are usually

@@ -30,7 +30,7 @@ class PhotoPolicyTests(unittest.TestCase):
             self.assertEqual(result["decimalLongitude"], row["decimalLongitude"])
             self.assertEqual(report.llm_provider_attempts, 0)
 
-    def test_no_photo_cannot_use_detailed_dwc_or_verbatim_coordinates(self):
+    def test_no_photo_keeps_plausible_decimal_coordinates_without_LLM(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             write_rows(root / "input" / "dwc.tsv", [dict(
@@ -41,10 +41,10 @@ class PhotoPolicyTests(unittest.TestCase):
             )])
             with patch("georeference_curator.pipeline.make_client", side_effect=AssertionError("No provider needed")):
                 report = run_pipeline(**pipeline_options(root, llm_mode="on"))
-            self.assertEqual(report.excluded_missing_source_image, 1)
-            self.assertEqual(report.records_written, 0)
+            self.assertEqual(report.excluded_missing_source_image, 0)
+            self.assertEqual(report.records_written, 1)
             row = read_rows(root / "out" / "georeference_candidates.tsv")[0]
-            self.assertEqual(row["decision"], "exclude_missing_source_image")
+            self.assertEqual(row["decision"], "keep_original")
             self.assertEqual(row["labelTranscription"], "")
 
     def test_transcription_without_source_image_cannot_bypass_screening(self):
@@ -107,10 +107,10 @@ class PhotoPolicyTests(unittest.TestCase):
 
     def test_unreadable_broad_or_missing_label_never_uses_dwc_fallback(self):
         cases = [
-            (dict(status="unreadable", labelTranscription="", localityText=""), "review"),
+            (dict(status="unreadable", labelTranscription="", localityText=""), "failed"),
             (dict(status="ok", labelTranscription="Japan", localityText="Japan"), "excluded"),
             (dict(status="ok", labelTranscription="Nagano Prefecture", localityText="Nagano Prefecture"), "excluded"),
-            (dict(status="ok", labelTranscription="Collector Smith [locality illegible]", localityText=""), "review"),
+            (dict(status="ok", labelTranscription="Collector Smith [locality illegible]", localityText=""), "failed"),
         ]
         for response, status in cases:
             with self.subTest(response=response), tempfile.TemporaryDirectory() as directory:
@@ -131,7 +131,7 @@ class PhotoPolicyTests(unittest.TestCase):
                         return response
                 with patch("georeference_curator.llm.resolve_cli_command", return_value="/test/bin/codex"), patch("georeference_curator.llm.command_available", return_value=True), patch("georeference_curator.pipeline.make_client", side_effect=Client), patch("georeference_curator.pipeline.preflight_llm"):
                     report = run_pipeline(**pipeline_options(root, llm_mode="on", label_coordinate_uncertainty_meters=30))
-                self.assertEqual(calls, ["transcription_only"])
+                self.assertEqual(calls, ["transcription_only", "georeference"] if "Collector Smith" in response.get("labelTranscription", "") else ["transcription_only"])
                 self.assertEqual(report.records_written, 0)
                 result = json.loads((root / "out" / "georeference.log.jsonl").read_text())
                 self.assertEqual(result["curationStatus"], status)

@@ -20,6 +20,8 @@ from .models import CoordinateCandidate, LabelRead
 from .checkpoints import fingerprint
 from .llm_cache import LlmResponseCache
 from .outputs import atomic_text
+from .policy import extent_uncertainty, positive_number
+from .interrupts import check_cancelled
 
 
 DEFAULT_OVERPASS_ENDPOINT = "https://overpass-api.de/api/interpreter"
@@ -78,6 +80,7 @@ class GeospatialRefinementSettings:
 
 
 def geospatial_payload(request, settings, required_key):
+    check_cancelled()
     key = fingerprint({"url": request.full_url, "data": (request.data or b"").decode("utf-8")})
     cache = LlmResponseCache(Path(settings.snapshot_directory)) if settings.snapshot_directory else None
     cached = cache.get(key) if cache and not settings.refresh_snapshots else None
@@ -114,7 +117,7 @@ def remaining_request_timeout(settings: GeospatialRefinementSettings) -> float:
         if remaining <= 0:
             raise TimeoutError("Coordinate verification exceeded its stage time limit.")
         timeout = min(timeout, remaining)
-    return max(0.1, timeout)
+    return max(0.1, min(15, timeout))
 
 
 @dataclass
@@ -526,6 +529,52 @@ def selected_dem_elevation(candidate, label, settings, cache):
             raise ValueError("Selected-point DEM elevation is unavailable")
         cache.elevations[key] = values[0]
     return round_elevation(cache.elevations[key], 10)
+
+
+def refine_label_elevation(candidate, label, settings, elevation_fetcher=None):
+    """Choose a DEM-compatible point inside the named extent; preserve coverage."""
+    if not settings.enabled or candidate.candidate_type in {"original_coordinate", "verbatim_coordinate"}:
+        return RefinementOutcome()
+    low, high = specimen_elevation(label)
+    if low is None or not candidate.supporting_geometry:
+        return RefinementOutcome()
+    outcome = RefinementOutcome(attempted=True)
+    try:
+        geometry = json.loads(candidate.supporting_geometry)
+        if geometry.get("type") != "bbox":
+            return RefinementOutcome()
+        south, west, north, east = map(float, geometry["coordinates"])
+        if not (-90 <= south <= north <= 90 and -180 <= west <= east <= 180):
+            return RefinementOutcome()
+        if haversine_km(south, west, north, east) > 100:
+            return RefinementOutcome()
+        points = [RoutePoint(south + (north - south) * i / 4, west + (east - west) * j / 4, 0)
+                  for i in range(5) for j in range(5)]
+        values = (elevation_fetcher or fetch_open_meteo_elevations)(points, settings)
+        if len(values) != len(points):
+            raise ValueError("DEM grid response length mismatch")
+        target = (low + high) / 2
+        valid = [(point, float(value)) for point, value in zip(points, values)
+                 if value is not None and math.isfinite(float(value))]
+        if not valid:
+            raise ValueError("DEM grid returned no finite elevation")
+        chosen, elevation = min(valid, key=lambda item: (max(low - item[1], item[1] - high, 0),
+            haversine_km(float(candidate.candidate_latitude), float(candidate.candidate_longitude), item[0].latitude, item[0].longitude)))
+        if abs(elevation - target) > max(100, (high - low) / 2):
+            return RefinementOutcome(attempted=True, warning="No sampled DEM point matches label elevation within 100 m; original locality estimate retained")
+        radius = max(positive_number(candidate.candidate_uncertainty_meters) or 0,
+                     extent_uncertainty(chosen.latitude, chosen.longitude, candidate.supporting_geometry) or 0)
+        outcome.candidate = replace(candidate, candidate_latitude=f"{chosen.latitude:.6f}", candidate_longitude=f"{chosen.longitude:.6f}",
+            source_latitude=candidate.source_latitude or candidate.candidate_latitude,
+            source_longitude=candidate.source_longitude or candidate.candidate_longitude,
+            candidate_uncertainty_meters=str(math.ceil(radius)), candidate_elevation_meters=str(round_elevation(elevation, 10)),
+            coordinate_operation="", candidate_type="elevation_constrained_locality",
+            evidence=candidate.evidence + "; point selected inside locality bounds using label elevation and Open-Meteo/Copernicus DEM; full locality extent retained in radius",
+            source_urls=" | ".join(filter(None, (candidate.source_urls, OPEN_METEO_DOCUMENTATION, COPERNICUS_DEM_DOI))))
+        return outcome
+    except Exception as exc:
+        outcome.warning = f"Label-elevation constraint unavailable: {exc}; geographic estimate retained"
+        return outcome
 
 
 def normalize_name(value: str) -> str:

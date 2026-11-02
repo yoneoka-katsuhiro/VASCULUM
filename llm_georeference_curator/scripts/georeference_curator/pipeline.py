@@ -18,12 +18,15 @@ from .geocoding import (
     read_gazetteer,
 )
 from .checkpoints import RecordJournal, file_hash, fingerprint, implementation_signature
+from .interrupts import check_cancelled, interruptible
+from .geographic_screen import DATA_PATH as GEOGRAPHIC_SCREEN_PATH
 from .geospatial_refinement import (
     GeospatialRefinementCache,
     GeospatialRefinementSettings,
     refine_llm_candidates,
     review_selected_habitat,
     selected_dem_elevation,
+    refine_label_elevation,
 )
 from .habitat import parse_habitats
 from .image_quality import inspect_image
@@ -174,11 +177,13 @@ def create_llm_json_with_backoff(
     )
     # Recheck inside the per-request lock so parallel duplicates share one call.
     with cache.request_lock(cache_key):
+        check_cancelled()
         cached = cache.get(cache_key)
         if cached is not None:
             return cached, 0, 0, True
         attempts = 0
         while True:
+            check_cancelled()
             backoff.wait(deadline=deadline)
             try:
                 if time.monotonic() >= deadline:
@@ -235,7 +240,7 @@ def screened_outcome(outcome, row, label, *, status, decision, reason):
     candidate = CoordinateCandidate(
         **candidate_base(label), candidate_source="input_screening",
         curation_status=status, curation_reasons=reason,
-        decision=decision, verification_status=status,
+        decision=decision, verification_status="unverified",
         original_latitude=row.get("decimalLatitude", ""),
         original_longitude=row.get("decimalLongitude", ""),
         original_datum=row.get("geodeticDatum", ""),
@@ -243,8 +248,8 @@ def screened_outcome(outcome, row, label, *, status, decision, reason):
         input_source=row.get("vasculumInputSource", ""),
     )
     outcome.result = CuratedResult(
-        row=dict(row, georeferenceVerificationStatus=status), candidates=[candidate],
-        decision=decision, verification_status=status, curation_status=status,
+        row=dict(row, georeferenceVerificationStatus="unverified", curationStatus=status, confidence="low"), candidates=[candidate],
+        decision=decision, verification_status="unverified", curation_status=status,
         include_in_dwc=False, exclusion_reason=reason, notes=[reason],
         original_coordinates={key: row.get(key, "") for key in (
             "decimalLatitude", "decimalLongitude", "geodeticDatum", "coordinateUncertaintyInMeters")},
@@ -282,6 +287,7 @@ def process_row(
     progress: TerminalProgress,
     source_auditor=None,
 ):
+    check_cancelled()
     catalog = catalog_number(row)
     outcome = RowOutcome(index=index, result=None)
     if row.get("_vasculumMissMarkers"):
@@ -294,12 +300,12 @@ def process_row(
             label_status="not_read_manual_exclusion", input_type=row.get("vasculumInputType", ""),
             input_source=row.get("vasculumInputSource", ""), candidate_source="human_filename_review",
             curation_status="excluded", curation_reasons=reason, selected="false",
-            decision="exclude_manual_misidentification", verification_status="excluded_manual_misidentification",
+            decision="exclude_manual_misidentification", verification_status="unverified",
             original_latitude=row.get("decimalLatitude", ""), original_longitude=row.get("decimalLongitude", ""),
             original_datum=row.get("geodeticDatum", ""),
         )
         result = CuratedResult(
-            row=dict(row, georeferenceVerificationStatus="excluded"), candidates=[candidate],
+            row=dict(row, georeferenceVerificationStatus="unverified", curationStatus="excluded", confidence="low"), candidates=[candidate],
             decision=candidate.decision, verification_status=candidate.verification_status,
             curation_status="excluded", include_in_dwc=False, exclusion_reason=reason, notes=[reason],
             original_coordinates={key: row.get(key, "") for key in ("decimalLatitude", "decimalLongitude", "geodeticDatum", "coordinateUncertaintyInMeters")},
@@ -327,15 +333,19 @@ def process_row(
         outcome.image_review_records += 1
 
     original_status = original_coordinate_status(row, options.reference_regions)
-    if original_status != "trusted" and not label.image_paths:
+    if original_status == "conversion_failed" and not label.image_paths:
+        outcome.stage_errors.append({"stage": "coordinate_conversion", "retryable": True, "error": "Existing CRS transformation failed and no label photograph is available."})
+        outcome.errors.append(f"{catalog}: existing CRS transformation failed")
+        return screened_outcome(outcome, row, label, status="failed", decision="failed", reason=outcome.stage_errors[-1]["error"])
+    if original_status not in {"trusted", "swapped"} and not label.image_paths:
         return screened_outcome(outcome, row, label, status="excluded",
-            decision="exclude_missing_source_image",
-            reason="No local specimen photograph and no trusted existing coordinates.")
+            decision="exclude_missing_source_image" if original_status == "missing" else "exclude_coordinate_conflict",
+            reason="No photograph and no coordinate." if original_status == "missing" else "Existing coordinates are obvious placeholders or geographically contradictory; no label is available for repair.")
     raw_coordinates, gazetteer_matches, llm_candidates = [], [], []
     insufficient_reason = ""
 
     has_untranscribed_image = bool(label.image_paths and label.label_status in {"image_not_transcribed", "dwc_text_only"})
-    if original_status == "trusted":
+    if original_status in {"trusted", "swapped"}:
         outcome.llm_skipped_precise_original += 1
     elif has_untranscribed_image and transcription_llm_client:
         transcription_message = (
@@ -383,28 +393,24 @@ def process_row(
             outcome.errors.append(f"{catalog}: label transcription failed: {exc}")
             outcome.stage_errors.append({"stage": "label_reading", "retryable": True, "error": str(exc)})
 
-    if original_status != "trusted":
+    if original_status not in {"trusted", "swapped"}:
         if outcome.stage_errors:
-            return screened_outcome(outcome, row, label, status="failed", decision="unresolved",
+            return screened_outcome(outcome, row, label, status="failed", decision="failed",
                 reason="Label reading failed; retry required. DwC locality is not a fallback.")
-        if label.label_status == "image_conflict":
-            return screened_outcome(outcome, row, label, status="review", decision="unresolved",
-                reason="Conflicting collecting events in specimen labels/views require human review.")
-        if label.label_status == "image_unreadable":
-            return screened_outcome(outcome, row, label, status="review", decision="unresolved",
-                reason="Collecting label is unreadable; no coordinate research was attempted.")
-        if label.label_status not in {"transcribed", "llm_image_transcribed"} or not (
+        if not (
             label.label_transcription.strip() or label.locality_text.strip()
         ):
-            return screened_outcome(outcome, row, label, status="unresolved", decision="unresolved",
-                reason="Specimen photograph has not yielded a label transcription.")
+            if label.label_status == "image_unreadable" and has_untranscribed_image and transcription_llm_client:
+                llm_cache.discard(response.get("_vasculum_request", {}).get("responseCacheKey", ""))
+            outcome.stage_errors.append({"stage": "label_reading", "retryable": True,
+                "error": "Required collecting-locality transcription missing; retry reading the source image."})
+            outcome.errors.append(f"{catalog}: required label-reading response missing")
+            return screened_outcome(outcome, row, label, status="failed", decision="failed",
+                reason="Required label-reading response missing; retry image reading.")
         raw_coordinates = extract_decimal_coordinates(coordinate_evidence_text(label))
         # DwC provides administrative context, never replacement label locality.
         label_context = {key: row.get(key, "") for key in ("country", "stateProvince")}
         insufficient_reason = insufficient_locality_reason(label_context, label)
-        if not label.locality_text.strip() and not any(is_precise_label_coordinate(value) for value in raw_coordinates):
-            return screened_outcome(outcome, row, label, status="review", decision="unresolved",
-                reason="No collecting locality could be read from the specimen label.")
         if insufficient_reason and not any(is_precise_label_coordinate(value) for value in raw_coordinates):
             outcome.llm_skipped_insufficient_locality += 1
             return screened_outcome(outcome, row, label, status="excluded",
@@ -416,24 +422,28 @@ def process_row(
         coordinate for coordinate in raw_coordinates if is_precise_label_coordinate(coordinate)
     ]
     has_searchable_text = bool(label.locality_text.strip() or label.label_transcription.strip())
-    should_call_georeference_llm = bool(
-        llm_client
-        and original_status != "trusted"
+    needs_georeference_research = bool(
+        original_status not in {"trusted", "swapped"}
         and not precise_label_coordinates
         and has_searchable_text
         and not insufficient_reason
         and bool(label.image_paths)
-        and label.label_status in {"transcribed", "llm_image_transcribed"}
+        and not gazetteer_matches
     )
+    should_call_georeference_llm = bool(llm_client and needs_georeference_research)
+    if needs_georeference_research and not llm_client:
+        error = "Required geographic provider is disabled or unavailable; retry with an available LLM."
+        outcome.stage_errors.append({"stage": "coordinate_research", "retryable": True, "error": error})
+        outcome.errors.append(f"{catalog}: {error}")
     if (
         llm_client
-        and original_status != "trusted"
+        and original_status not in {"trusted", "swapped"}
         and precise_label_coordinates
     ):
         outcome.llm_skipped_precise_label += 1
     elif (
         llm_client
-        and original_status != "trusted"
+        and original_status not in {"trusted", "swapped"}
         and not should_call_georeference_llm
         and insufficient_reason
     ):
@@ -485,6 +495,17 @@ def process_row(
             effective_model = str(response.get("_vasculum_model") or selected_model_label(llm_settings))
             llm_candidates = llm_response_to_candidates(response, label, effective_model)
             outcome.llm_candidate_rows += len(llm_candidates)
+            if not llm_candidates:
+                exclusion = str(response.get("exclusionReason", ""))
+                if exclusion == "country_or_admin1_only" and label.locality_text.strip() and not insufficient_reason:
+                    llm_cache.discard(response.get("_vasculum_request", {}).get("responseCacheKey", ""))
+                    raise ValueError("Provider rejected a specific legible locality instead of supplying its required best point-radius estimate; retry research")
+                if exclusion in {"country_or_admin1_only", "coordinate_admin_conflict"}:
+                    return screened_outcome(outcome, row, label, status="excluded",
+                        decision="exclude_insufficient_locality" if exclusion == "country_or_admin1_only" else "exclude_coordinate_conflict",
+                        reason=str(response.get("remarks") or exclusion))
+                llm_cache.discard(response.get("_vasculum_request", {}).get("responseCacheKey", ""))
+                raise ValueError("Required best point-radius estimate missing from geographic-research response")
         except Exception as exc:
             outcome.llm_errors += 1
             outcome.errors.append(f"{catalog}: LLM georeferencing failed: {exc}")
@@ -531,6 +552,15 @@ def process_row(
             break
         break
 
+    if use_dem and row_refinement_settings.enabled:
+        for candidate_index, candidate in enumerate(list(llm_candidates)):
+            check_cancelled()
+            with progress.activity(f"Label elevation {catalog}", stage="Coordinate verification", index=index, total=total_rows, catalog=catalog, model="Open-Meteo/Copernicus DEM"):
+                elevation_constraint = refine_label_elevation(candidate, label, row_refinement_settings)
+            if elevation_constraint.candidate:
+                llm_candidates[candidate_index] = elevation_constraint.candidate
+            if elevation_constraint.warning:
+                outcome.geospatial_refinement_warnings.append(f"{catalog}: {elevation_constraint.warning}")
     result = select_result(
         row=row,
         label=label,
@@ -540,6 +570,9 @@ def process_row(
         insufficient_locality=insufficient_reason,
         options=options,
     )
+    if result.selected_candidate and label.label_status in {"image_unreadable", "image_conflict"}:
+        result.selected_candidate.confidence = result.row["confidence"] = "low"
+        result.row["georeferenceRemarks"] += "; partial/conflicting label evidence; most specific legible locality used"
     result.stage_errors = outcome.stage_errors
     result.provenance = {"inputPolicy": "photo_label_first", "sourceEvidenceEligible": True,
                          "promptVersion": PROMPT_VERSION, "stages": outcome.llm_usage}
@@ -555,13 +588,14 @@ def process_row(
             outcome.geospatial_refinement_warnings.append(f"{catalog}: DEM elevation unavailable: {exc}")
     if outcome.stage_errors and result.curation_status != "accepted":
         result.curation_status = "failed"
-        result.decision = "unresolved"
-        result.verification_status = "failed_processing"
+        result.decision = "failed"
+        result.verification_status = "unverified"
         result.exclusion_reason = ""
-        result.row["georeferenceVerificationStatus"] = "failed"
+        result.row["curationStatus"] = "failed"
         result.row["georeferenceRemarks"] += "; processing_failed_retryable; not an insufficient-locality conclusion"
         result.include_in_dwc = False
         for candidate in result.candidates:
+            candidate.curation_status = "failed"
             candidate.decision = result.decision
             candidate.verification_status = result.verification_status
     if habitat_preference.enabled:
@@ -594,6 +628,11 @@ def process_row(
         if review.status == "warning":
             result.notes.append(f"Habitat review warning: {review.remarks}")
             progress.update(f"Habitat review warning: {catalog} | coordinates retained | {review.remarks}")
+    if result.curation_status == "failed" and not outcome.stage_errors:
+        error = {"stage": "coordinate_research", "retryable": True, "error": result.exclusion_reason}
+        outcome.stage_errors.append(error)
+        outcome.errors.append(f"{catalog}: {error['error']}")
+        result.stage_errors = outcome.stage_errors
     outcome.result = result
     result.provenance["geospatialSnapshots"] = row_refinement_settings.audit_records
     result.llm_usage = outcome.llm_usage
@@ -604,7 +643,9 @@ def process_row(
 def aggregate_outcome(report: RunReport, outcome: RowOutcome):
     result = outcome.result
     report.accepted += int(result.curation_status == "accepted")
-    report.review += int(result.curation_status == "review")
+    if result.include_in_dwc:
+        confidence = result.row.get("confidence", "low")
+        report.confidence_counts[confidence] = report.confidence_counts.get(confidence, 0) + 1
     report.failed += int(result.curation_status == "failed")
     report.resumed_records += int(outcome.checkpoint_reused)
     report.image_records += outcome.image_records
@@ -637,7 +678,7 @@ def aggregate_outcome(report: RunReport, outcome: RowOutcome):
     report.geospatial_refinement_warnings.extend(outcome.geospatial_refinement_warnings)
     report.errors.extend(outcome.errors)
 
-    if not result.include_in_dwc:
+    if result.curation_status == "excluded":
         report.excluded += 1
         if result.decision == "exclude_insufficient_locality":
             report.excluded_insufficient_locality += 1
@@ -651,12 +692,9 @@ def aggregate_outcome(report: RunReport, outcome: RowOutcome):
         report.corrected_existing += 1
     elif result.include_in_dwc and result.decision == "infer_missing":
         report.inferred_missing += 1
-    if result.curation_status == "unresolved":
-        report.unresolved += 1
-    if "review" in result.verification_status or result.habitat_review.get("status") == "warning":
-        report.review_required += 1
 
 
+@interruptible
 def run_pipeline(
     project_dir: Path,
     input_dir: Path,
@@ -747,7 +785,7 @@ def run_pipeline(
     gazetteer = read_gazetteer(gazetteer_tsv.expanduser().resolve() if gazetteer_tsv else None)
 
     needs_llm = any(not row.get("_vasculumMissMarkers") and
-        original_coordinate_status(row, reference_regions) != "trusted" and
+        original_coordinate_status(row, reference_regions) not in {"trusted", "swapped"} and
         label_image_paths(source_dir, row, sidecars) for row in rows)
     provider = normalize_provider(llm_provider or DEFAULT_LLM_PROVIDER)
     llm_settings = LlmSettings(
@@ -894,6 +932,7 @@ def run_pipeline(
         "effectiveResearchModels": model_candidates_for(llm_settings),
         "effectiveTranscriptionModels": model_candidates_for(transcription_llm_settings),
         "curatorVersion": version,
+        "geographicScreenSha256": file_hash(GEOGRAPHIC_SCREEN_PATH),
         "ribbonRenderer": ribbon_runtime,
         "vasculumVersion": (project_dir.parent / "VERSION.txt").read_text().strip() if (project_dir.parent / "VERSION.txt").exists() else "unknown",
         "inputDwcSha256": file_hash(dwc_path) if dwc_path else "",
@@ -915,20 +954,21 @@ def run_pipeline(
         error = {"stage": "record_processing", "retryable": True, "error": str(exc)}
         candidate = CoordinateCandidate(
             catalog_number=catalog_number(row), occurrence_id=row.get("occurrenceID", ""),
-            candidate_source="processing_failed", curation_status="failed", decision="unresolved",
-            verification_status="failed_processing", remarks=str(exc),
+            candidate_source="processing_failed", curation_status="failed", decision="failed",
+            verification_status="unverified", remarks=str(exc),
             original_latitude=row.get("decimalLatitude", ""), original_longitude=row.get("decimalLongitude", ""),
             original_datum=row.get("geodeticDatum", ""),
         )
         result = CuratedResult(
-            row=dict(row, georeferenceVerificationStatus="failed"), candidates=[candidate],
-            decision="unresolved", verification_status="failed_processing", curation_status="failed",
+            row=dict(row, georeferenceVerificationStatus="unverified", curationStatus="failed", confidence="low"), candidates=[candidate],
+            decision="failed", verification_status="unverified", curation_status="failed",
             include_in_dwc=False, stage_errors=[error], original_coordinates=dict(row),
             provenance={"configurationHash": journal.configuration_hash, "inputRecordHash": fingerprint(row)},
         )
         return RowOutcome(index=index, result=result, candidates=[candidate], errors=[f"{catalog_number(row)}: {exc}"], stage_errors=[error])
 
     def run_record(index, row):
+        check_cancelled()
         images = label_image_paths(source_dir, row, sidecars) if not row.get("_vasculumMissMarkers") else []
         image_digests = [{"path": image, "sha256": file_hash((source_dir / image).resolve())} for image in images]
         image_digest = fingerprint(image_digests)
@@ -971,12 +1011,13 @@ def run_pipeline(
             inputSource=row.get("vasculumInputSource", ""), currentInputFiles=bundle.files,
             recordKey=key, completedAt=datetime.now().astimezone().isoformat(),
         )
-        retryable = bool(outcome.stage_errors or outcome.geospatial_refinement_warnings or outcome.habitat_review_unavailable)
+        retryable = bool(outcome.result.curation_status == "failed" or outcome.stage_errors or outcome.geospatial_refinement_warnings or outcome.habitat_review_unavailable)
         source_unavailable = any(
             check.get("status") == "unavailable"
             for item in outcome.candidates for check in json.loads(item.source_checks or "[]")
         )
         if not retryable and not source_unavailable:
+            check_cancelled()
             journal.put(key, asdict(outcome))
         return outcome
 
@@ -1030,6 +1071,7 @@ def run_pipeline(
         all_candidates.extend(outcome.candidates)
         results.append(result)
 
+    check_cancelled()
     destination.mkdir(parents=True, exist_ok=True)
     report.images_exported = export_final_images(destination, source_dir, results, sidecars, cache_directory, enabled=export_images)
     fieldnames = merged_fieldnames(input_fieldnames)

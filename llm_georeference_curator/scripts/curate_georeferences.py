@@ -206,7 +206,7 @@ def main() -> int:
             export_images=args.export_images,
         )
     except (KeyboardInterrupt, EOFError):
-        print("\nInterrupted.", file=sys.stderr)
+        print("\nInterrupted. All record workers stopped; completed checkpoints and transcription caches are preserved.", file=sys.stderr)
         return 130
     except Exception as exc:
         print(f"ERROR: {exc}", file=sys.stderr)

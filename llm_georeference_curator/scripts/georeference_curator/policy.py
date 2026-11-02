@@ -11,6 +11,10 @@ from .geocoding import haversine_km, parse_decimal, valid_lat_lon
 from .inputs import read_table
 
 
+UNKNOWN_DATUM_ALLOWANCE_METERS = 5000
+UNSTATED_POSITION_ALLOWANCE_METERS = 1000
+
+
 def positive_number(value):
     number = parse_decimal(value)
     return number if number is not None and math.isfinite(number) and number > 0 else None
@@ -33,12 +37,16 @@ class ConvertedCoordinate:
     datum: str
     operation: str
     accuracy_meters: float | None
+    assumption: str = ""
 
 
 def to_wgs84(latitude: float, longitude: float, datum: str) -> ConvertedCoordinate:
     crs_name = canonical_crs(datum)
     if not crs_name:
-        raise ValueError("Coordinate reference system is missing or unrecognized; no WGS84 assumption made.")
+        if not valid_lat_lon(latitude, longitude):
+            raise ValueError("Coordinates are outside valid geographic ranges.")
+        note = "datum not stated; assumed WGS84" if not str(datum or "").strip() else f"datum unrecognized ({datum}); assumed WGS84"
+        return ConvertedCoordinate(latitude, longitude, "WGS84", "assumed EPSG:4326", UNKNOWN_DATUM_ALLOWANCE_METERS, note)
     if crs_name == "EPSG:4326":
         if not valid_lat_lon(latitude, longitude):
             raise ValueError("Coordinates are outside valid geographic ranges.")
@@ -60,7 +68,7 @@ def to_wgs84(latitude: float, longitude: float, datum: str) -> ConvertedCoordina
     group = TransformerGroup(source, "EPSG:4326", always_xy=True, allow_ballpark=False,
                              area_of_interest=AreaOfInterest(longitude - 0.01, latitude - 0.01, longitude + 0.01, latitude + 0.01))
     if not group.best_available or not group.transformers:
-        raise ValueError("The best datum transformation requires an unavailable grid; point retained for review.")
+        raise ValueError("The best datum transformation requires an unavailable grid; transformation failed and is retryable.")
     transformer = group.transformers[0]
     lon, lat = transformer.transform(longitude, latitude, errcheck=True)
     if not valid_lat_lon(lat, lon):

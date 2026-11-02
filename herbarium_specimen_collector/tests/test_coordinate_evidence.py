@@ -13,7 +13,6 @@ from specimen_collector.models import SpecimenRecord
 from specimen_collector.outputs import dwc_row
 from specimen_collector.records import deduplicate
 from specimen_collector.sources import dwc_metadata, gbif_records
-from georeference_curator.scoring import original_coordinate_status
 
 
 class CoordinateEvidenceTests(unittest.TestCase):
@@ -25,7 +24,9 @@ class CoordinateEvidenceTests(unittest.TestCase):
         record = SpecimenRecord(source="gbif", decimal_latitude="35.123456",
                                 decimal_longitude="138.123456", **dwc_metadata(metadata))
         row = dwc_row(record, "Example species")
-        self.assertEqual(original_coordinate_status(row), "trusted")
+        self.assertEqual(row["geodeticDatum"], "WGS84")
+        self.assertEqual(row["coordinateUncertaintyInMeters"], "30")
+        self.assertEqual(row["georeferenceProtocol"], "GPS measurement")
         self.assertEqual(row["datasetName"], "Example herbarium")
         self.assertEqual(row["datasetID"], "dataset-key")
         self.assertEqual(row["georeferencedBy"], "Field collector")
@@ -43,7 +44,7 @@ class CoordinateEvidenceTests(unittest.TestCase):
         self.assertEqual(mixed.decimal_latitude, "35.123456")
         self.assertEqual(mixed.geodetic_datum, "")
         self.assertEqual(mixed.coordinate_uncertainty_meters, "")
-        self.assertNotEqual(original_coordinate_status(dwc_row(mixed, "Example species")), "trusted")
+        self.assertEqual(dwc_row(mixed, "Example species")["geodeticDatum"], "")
         donor = merge(dict(source="gbif", image_url="https://example.org/a.jpg", decimal_latitude="35"),
                       dict(source="cvh", source_record_url="https://example.org/cvh/A",
                            decimal_latitude="36.123456", decimal_longitude="139.123456",
@@ -51,7 +52,7 @@ class CoordinateEvidenceTests(unittest.TestCase):
         self.assertEqual(donor.decimal_latitude, "36.123456")
         self.assertEqual(donor.coordinate_source, "https://example.org/cvh/A")
         self.assertEqual(donor.source, "gbif")
-        self.assertEqual(original_coordinate_status(dwc_row(donor, "Example species")), "trusted")
+        self.assertEqual(dwc_row(donor, "Example species")["coordinateUncertaintyInMeters"], "20")
 
     def test_gbif_data_and_media_licenses_are_not_conflated(self):
         class Client:
@@ -67,11 +68,11 @@ class CoordinateEvidenceTests(unittest.TestCase):
         row = dwc_row(records[0], "Example species")
         self.assertEqual(row["license"], "data-license")
         self.assertEqual(row["vasculumImageLicense"], "image-license")
-        self.assertEqual(original_coordinate_status(row), "trusted")
+        self.assertEqual(row["geospatialIssues"], "")
         record = SpecimenRecord(decimal_latitude="35.123456", decimal_longitude="138.123456",
                                 **dwc_metadata(dict(geodeticDatum="WGS84", coordinateUncertaintyInMeters=50,
                                     georeferenceProtocol="GPS", issues=["COORDINATE_COUNTRY_MISMATCH"])))
-        self.assertNotEqual(original_coordinate_status(dwc_row(record, "Example species")), "trusted")
+        self.assertIn("COORDINATE_COUNTRY_MISMATCH", dwc_row(record, "Example species")["geospatialIssues"])
 
 
 if __name__ == "__main__":

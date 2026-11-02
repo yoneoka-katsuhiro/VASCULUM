@@ -44,6 +44,13 @@ def insufficient_locality_reason(row, label) -> str:
         return "No locality text is available."
 
     stripped = text.strip(" .,:;")
+    compact = re.sub(r"[\W_]+", "", stripped)
+    remainder = compact
+    for admin in sorted((country, state), key=len, reverse=True):
+        if admin:
+            remainder = remainder.replace(re.sub(r"[\W_]+", "", admin), "")
+    if (country or state) and not remainder:
+        return f"Locality reaches only country or first-order administrative level: {stripped}."
     if stripped in COUNTRY_ONLY or stripped == country or stripped == state:
         return f"Locality is too broad for georeferencing: {stripped}."
 

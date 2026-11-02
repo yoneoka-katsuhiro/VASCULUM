@@ -1,39 +1,36 @@
-# llm_georeference_curator v0.1.15
+# llm_georeference_curator v0.1.16
 
-LLM-assisted georeferencing for herbarium specimen photographs and Darwin Core
-(DwC) records. Original source material comes first; documented existing
-coordinates are retained.
+Automatically determine a best point-radius georeference from existing DwC
+coordinates or the finest legible locality on a specimen photograph. The tool
+makes an adoption decision; final scientific validation belongs to the user.
 
-## One Selection Rule
+## Decisions
 
-1. **Trusted existing coordinates:** retain them, with or without a photograph.
-   Do not reread the label with an LLM or research replacement coordinates.
-2. **Untrusted/missing coordinates, photograph available:** read the original
-   collecting label. Convert detailed printed coordinates, or research the
-   collecting locality actually read from the photograph. DwC is auxiliary
-   context, never a substitute for missing label evidence.
-3. **Untrusted/missing coordinates, no local photograph:** exclude the specimen
-   from final DwC. Do not infer coordinates from DwC locality text alone.
-4. **Photograph unreadable or locality insufficient:** retain the reason in the
-   candidate TSV and log, not the final DwC. An unreadable label requires review;
-   an evaluated country/province-only label is excluded. A technical reading
-   failure remains retryable, rather than being treated as a poor locality.
+- **accepted:** a best coordinate and positive uncertainty radius are determined
+  and written to final DwC. Doubt is expressed as confidence high/medium/low,
+  assumptions and radius, not a holding state.
+- **excluded:** country/admin-1-only label locality; no photograph and no usable
+  coordinate; a miss_ exclusion mark; or an obvious geographic contradiction
+  that cannot be repaired from the label.
+- **failed:** a technical interruption, unavailable required provider, invalid
+  required response, timeout or transformation failure. Failed work is retryable
+  and is not a completed-record checkpoint.
 
-A remote image URL or a missing local file does not count as an available
-photograph. A supplied transcription needs its linked source photograph.
-Untranscribed images with LLM disabled are unresolved, not automatically accepted.
+There are no review/unresolved record states. A county, township, village,
+mountain, river, pass or forest road is not rejected for being broad. A partial
+reading is usable: unreadable suffixes are not invented and do not prevent a
+best estimate from the legible place. A label stating only country/admin-1 is
+excluded for insufficient locality. A wholly unreadable image has not supplied
+the required reading: it is a retryable reading failure, not an extra exclusion
+category or a hidden review queue. Successful partial transcriptions are cached.
 
-There are no standard/robust modes, alternate prompt profiles, text-only
-benchmark workflows, or locality-only fallback. No digitization-bias analysis
-or additional statistical reports are generated.
+All final records have georeferenceVerificationStatus=unverified. accepted means
+machine-adopted, not independently proven true. The user can update verification
+status after checking every record. confidence is qualitative, not a probability.
 
 ## Quick Start
 
-From the VASCULUM root:
-
-Install R from https://cran.r-project.org/ first. setup_mac.sh installs ggplot2
-and ggalluvial into the pipeline's private .Rlibrary/ when needed. These R
-packages are required for the automatic ribbon PDF; no alternate renderer is used.
+Install [R](https://cran.r-project.org/) before setup. From the VASCULUM root:
 
 ```bash
 bash setup_mac.sh
@@ -45,36 +42,68 @@ bash llm_georeference_curator/run_llm_georeference_curator.sh \
   --habitat "subalpine forest"
 ```
 
-Codex CLI is the default provider and uses the saved Codex/ChatGPT login.
-An OpenAI API key is not required for that provider. Before actual LLM work,
-the program checks the provider and requests confirmation about token/credit
-use. Trusted-coordinate and no-photo-only runs do not need an LLM provider.
-Use --llm-mode on to require LLM availability when photo reading is needed,
-or --llm-mode off for local checks and supplied label transcriptions.
+Codex CLI uses the saved account login and does not require an API key. An
+available provider is used in --llm-mode auto; --llm-mode on requires LLM work
+when needed, while off uses existing coordinates/local supplied evidence only.
+The default model selection prefers gpt-6.1-sol with medium reasoning. Label
+reading and geographic research have separate requests and 600-second stage
+limits. --label-model and --llm-model can override the models independently.
+--workers auto shares provider backoff; it does not override account limits.
 
-Models default to auto selection with gpt-6.1-sol first and medium reasoning.
-Label reading and locality research use separate requests. Stage timeouts
-default to 600 seconds each. Parallel workers default to auto and share
-rate-limit backoff; this is not a claim about the account's allowed concurrency.
-The terminal shows model names and per-record progress.
+Use --limit 10 for a small run. --max-llm-calls limits fresh provider attempts,
+not tokens. LLM use can consume account allowance or credits; confirmation is
+requested before calls unless --yes is supplied. Other CLI providers require
+an explicitly configured compatible command; see .env.example.
 
-A small run:
+## Coordinate Policy
 
-```bash
-bash llm_georeference_curator/run_llm_georeference_curator.sh \
-  --input herbarium_specimen_collector/output/Haplopteris_mediosora \
-  --llm-mode on \
-  --limit 10
-```
+Plausible existing decimal coordinates are adopted without an LLM call, even
+without a photograph or GPS provenance. Zero placeholders, invalid/swapped
+coordinates, country/state contradictions, indicated institutional locations
+and apparent national-center/capital placeholders are screened first. A unique
+valid latitude/longitude swap can be corrected locally. Current bundled Natural
+Earth references provide conservative checks, not exact historical boundaries.
+Institutional checks use supplied institutional coordinates or explicit source
+flags; they are not a complete global herbarium-location registry.
 
-Exact-response caching and completed-record checkpoints are enabled by default.
-Changed records/photos/settings/code invalidate the corresponding work. Removing
---limit processes the full input. Stage failures remain eligible for retry.
---max-llm-calls caps fresh provider attempts, not tokens.
+A blank datum is assumed WGS84 with the exact remark
+"datum not stated; assumed WGS84" and a 5000 m datum allowance added to the
+radius. An unrecognized named geographic datum is also explicitly identified
+as an assumption. Missing positional error receives a 1000 m policy allowance,
+in addition to coordinate rounding and datum/transformation allowance. These
+are conservative operational assumptions, not measured error or a universal
+scientific bound. Supplied uncertainty is never reduced below the rounding
+minimum. Original WGS84 decimal strings are preserved.
+
+Otherwise read the whole specimen photograph. Detailed printed coordinates
+are converted locally without geographic research; missing measurement error
+uses the same explicit 1000 m allowance. Otherwise the LLM researches the
+finest legible locality, including collecting-era names and relocated places.
+It uses one relevant local language first, stops when sufficient evidence is
+found and falls back to other languages only as needed.
+
+For a named area, use a representative center or documented office, with a
+radius covering the possible collecting area. A reported LLM radius is allowed.
+Bounds enlarge an insufficient radius; a missing radius receives a clearly
+identified low-confidence 50000 m policy allowance rather than a false precise
+value. None of these policy defaults is an empirical accuracy guarantee.
+
+Printed elevation is retained, converting common imperial units to metres.
+Open-Meteo/Copernicus DEM may select an elevation-compatible point inside the
+named bounds. Sparse DEM samples do not prove that all possible sites have
+been constrained, so the automatic grid step retains a radius covering the
+whole named extent. DEM height is reported to 10 m granularity, not guaranteed
+10 m vertical accuracy. Species-wide --habitat generates warnings only; it
+does not move points or exclude records.
+
+No upper horizontal-uncertainty limit is imposed by default. For a particular
+analysis, use --max-uncertainty-meters N. This explicit filter excludes an
+otherwise adopted estimate exceeding N; it does not select a less defensible
+alternative just because that alternative reports a smaller radius.
 
 ## Outputs
 
-Six primary files are written to output/<input_name>_georeferenced/:
+Six primary files are generated in output/<input_name>_georeferenced/:
 
 - modified_dwc.csv
 - modified_dwc.tsv
@@ -83,182 +112,66 @@ Six primary files are written to output/<input_name>_georeferenced/:
 - georeference.log.jsonl
 - georeference_flow.pdf
 
-Final DwC contains accepted records only. The candidate TSV combines label
-transcriptions, candidate coordinates, evidence and dispositions for all records.
-The log preserves model requests, source references, input/image/code hashes,
-before/after coordinates and errors. These are audit artifacts, not extra
-bias-analysis reports. Input tables and original photographs are not modified.
+Final DwC contains accepted records, confidence, positive uncertainty, datum,
+protocol, actual sources, decision remarks and unverified verification status.
+The combined TSV retains transcriptions, alternatives and dispositions for all
+records. JSONL logs preserve original/modified coordinates, model calls,
+prompts, hashes, sources, assumptions and technical errors. Originals are not
+modified. --output chooses a separate destination; --dry-run validates inputs
+without LLM requests or new outputs. --input-dwc selects an edited CSV/TSV
+explicitly if the two generated tables differ.
 
-Use --output PATH for a separate output directory, --dry-run to validate inputs,
-or --input-dwc PATH to choose a table explicitly when edited TSV and CSV disagree.
+The automatic vector ribbon PDF uses one R/ggalluvial renderer, fixed
+GBIF/CVH/Other grays and 50% opacity. Widths represent actual counts. Exits
+terminate below the retained stream. Complete, hash-matched collector history
+enables collection/deduplication stages; otherwise the figure starts at curator
+input and does not invent missing collection paths. Source ownership after
+deduplication is the retained representative portal, not all contributing portals.
 
-### Ribbon Plot
+Use scripts/plot_georeference_flow.R in RStudio for the same renderer:
+source it, then call plot_georeference_flow(counts, "flow.pdf"). counts is a
+data.frame with source/input/evidence/accepted or
+source/collected/unique/evidence/accepted. The run's counts and R/package/renderer
+versions are retained in summary.txt. Setup installs ggplot2 and ggalluvial into
+the private .Rlibrary; R is checked before any LLM request.
 
-The PDF is generated from actual per-record decisions: GBIF, CVH and Other keep
-their fixed dark/mid/light grays through retained and excluded branches.
-Ribbon opacity is 50%; width is proportional to count. Exclusions terminate
-below the main stream. Only stage names and counts are shown; no simulated
-records or estimates are inserted into production plots.
+## Personal Specimens And Identity Checks
 
-New collector outputs record source-specific counts and a DwC hash inside
-summary.txt, and vasculumPrimarySource in DwC. A unique specimen keeps its
-retained primary source; additional portal records terminate as merged duplicates.
-vasculumSources preserves the contributing portal list. datasetName/datasetID
-are reserved for the supplied underlying dataset metadata. Thus the diagram
-tracks the retained representative portal, not every duplicate's original portal.
+Before curation, add optional personal/dwc.tsv (or dwc.csv) and whole photos in
+personal/images/ beside the collector output. These are included automatically.
+External tables/directories can be added with repeated --additional-input PATH.
+Photo-only groups become records; use stable occurrenceID values. Names such as
+MY1__front.jpg, MY1__back.jpg and MY1__label.jpg group whole views for one record.
+Ambiguous image ownership and duplicate identifiers are reported, not guessed.
 
-With matching, complete collector provenance, the plot starts with collection
-and duplicate merging. Older/edited/subset inputs and personal additions start
-at curator Input instead; unavailable duplicate paths are never reconstructed
-by guessing. Mixed legacy datasetName values require vasculumPrimarySource for
-unambiguous attribution. A plotting error is reported without discarding DwC,
-candidate TSV or log; a previous run's plot is not left as a current result.
+After visual inspection, prefix a misidentified specimen's input photograph
+with miss_. Any marked view excludes the entire linked specimen, its final DwC
+row and every exported view, without an LLM call. Markers are case-insensitive
+and originals are retained for undo. --export-images creates a managed final
+image folder for accepted specimens; unknown/edited files and symlinks in that
+folder are protected. The software does not automatically certify identification.
 
-scripts/plot_georeference_flow.R is the same renderer used automatically and in
-RStudio. Source it and call plot_georeference_flow(counts, "flow.pdf") with a
-data.frame containing source/input/evidence/accepted, or
-source/collected/unique/evidence/accepted. Counts used for the run are recorded
-as Ribbon counts in summary.txt. R/package availability is checked before any
-LLM request; --dry-run does not require R or write a plot.
-R/package versions and the R renderer's hash are retained in the summary's
-reproducibility configuration. Changes to the R renderer alone do not invalidate
-completed scientific-record checkpoints.
-Source evidence means the trusted-coordinate route or a usable source-label
-reading was reached. Not advanced includes manual exclusions, unreadable/broad
-labels, missing images and failures before that gate. Not accepted includes
-review, unresolved and failed cases after the gate, not only rejected specimens.
+Use run_collect_and_georeference.sh --pause-before-curation to pause between
+collection and curation for additions and visual review. Partial collection
+failures offer a y/n continuation choice.
 
-## Add Your Own Specimens Before Curation
+## Cache And Interruption
 
-Add photographs and/or a personal DwC table beside the collector output:
+v0.1.15 transcription instructions, response schema and cache-key format are
+unchanged. Reuse the previous .cache/llm_georeference_curator directory (or pass
+--llm-cache-dir PATH); matching model/settings, prompt and image content reuse
+the completed reading. No command-line cropping or extra OCR stage is added.
+Only geographic-research instructions changed. Old record decisions are
+recalculated under the new policy; completed transcription responses remain
+reusable. Retry a failed research call without rereading a successful label.
 
-```text
-Haplopteris_mediosora/
-  dwc.tsv
-  dwc.csv
-  images/
-  personal/
-    dwc.tsv
-    images/
-      MY0001__front.jpg
-      MY0001__label.jpg
-      MY0002.jpg
-```
+Ctrl-C cancels the entire run and all owned provider process groups, including
+parallel workers, with exit code 130. A provider process exiting on SIGINT is
+also treated as whole-run interruption, not a record error followed by the next
+specimen. Completed checkpoints/caches are retained; partial results are not
+published as a completed final dataset.
 
-The personal/ folder is included automatically. A photo-only group becomes one
-specimen; multiple whole images are read together. Useful view suffixes include
-__front, __back, __recto, __verso, __label, __label1 and __1. JPEG, PNG and WebP
-are supported. A personal DwC row without a photograph is retained only if
-its existing coordinates pass the same trust checks.
-
-External DwC CSV/TSV files or directories can be added with repeated
---additional-input PATH. Tables resolve their images beside themselves.
-Use stable occurrenceID values for permanent specimen identities.
-Ambiguous image ownership and duplicate occurrenceID values cause a clear error
-instead of a guessed link. Source provenance remains attached to each specimen.
-
---no-include-personal disables personal/ discovery. Loose photographs in the
-main collector images/ folder are not made into extra specimens unless
---import-unlinked-images is supplied. It is safer to place additions in personal/
-than to rely on edits to main tables that the collector can regenerate.
-
-## Remove Misidentifications Visually
-
-Prefix an input image filename with miss_:
-
-```text
-images/P01185529_Haplopteris_mediosora.jpg
-  -> images/miss_P01185529_Haplopteris_mediosora.jpg
-```
-
-On the next run, the entire linked specimen is excluded: both final DwC rows
-and all exported photo views. This overrides even trusted coordinates.
-No LLM/geospatial request is made for that specimen. The prefix is
-case-insensitive; a marker on one view is enough.
-
-Original marker photos are retained for audit and undo. Remove all miss_
-prefixes on that specimen's input views to restore eligibility. Do not rename
-derived final-image copies to mark exclusions.
-
-This is a human identification workflow: inspect the photograph, mark a
-misidentification, and rerun. The program does not automatically diagnose
-species identification from the image.
-
-## Optional Final Image Folder
-
-Add --export-images to copy photographs of accepted specimens into the final
-output/images/ folder and write portable media references in modified DwC.
-miss_-marked and other unaccepted specimens are not copied.
-
-Once enabled for an output directory, managed exports stay synchronized on
-later runs. Only the program's unchanged managed copies are removed or replaced.
-Unknown or user-edited files cause an actionable error; use a fresh --output
-rather than risk overwriting original photographs.
-
-## Collection-To-Curation Handoff
-
-```bash
-bash run_collect_and_georeference.sh \
-  --pause-before-curation \
-  --taxon "Haplopteris mediosora" \
-  --synonym "Vittaria mediosora" \
-  --image-resolution standard \
-  -- \
-  --habitat "subalpine forest" \
-  --export-images
-```
-
---pause-before-curation waits for manual additions/review after collection.
-Collector partial failures offer a y/n continuation choice. The explicit pause
-still waits for a decision even when curator --yes is used for unattended LLM
-confirmation.
-
-## Evidence And Elevation
-
-Trust is based on coordinate provenance, a recognized/converted datum,
-documented uncertainty and consistency checks, not decimal-place count.
-Documented originals, sufficiently supported printed coordinates and verified
-reference extents can pass these checks. Model confidence and reachable URLs
-alone do not establish acceptance. LLM-only estimates remain review proposals
-until the evidence requirements are met.
-These are protocol checks, not proof of the unknown true collecting position.
-
-Printed-coordinate rounding is only a minimum uncertainty. An explicitly
-justified --label-coordinate-uncertainty-meters or sidecar measurement allowance
-can be added; it must not be invented to increase acceptance. Unknown datum
-and uncertainty remain unknown. --max-uncertainty-meters is an optional
-study-specific acceptance limit, not an accuracy guarantee.
-
---label-tsv accepts manual transcriptions keyed by catalogNumber and linked by
-imagePath. Supply localityText for locality research; detailed printed coordinates
-can be parsed from labelTranscription. --gazetteer-tsv can provide verified
-reference locations for names actually read from source photographs.
-Neither input bypasses the photograph requirement for new coordinate estimates.
-
-Whole photographs are passed to label reading; no command-line crop or OCR
-pipeline is used. Search uses one relevant collecting-country language first,
-then English only if needed; Chinese fallback is context-dependent.
-
-Printed label elevations are retained, with common imperial units converted
-to metres. Without a readable label elevation, DEM estimates are reported to
-10 m granularity, not guaranteed plus/minus 10 m accuracy.
-Recorded collecting-event terrain/habitat can support locality research.
---habitat supplies species-wide ecology for warnings only; it never relocates
-points, changes uncertainty or excludes a specimen.
-
-## Upgrade Notes
-
-Remove the former --robust, --standard, --curation-mode, --prompt-profile,
---georeference-method, --original-precision-decimals, --taxon-habitat,
---llm-timeout-seconds and --debug-log options from old commands.
-Use the three stage timeout options if needed; the six primary outputs,
-including the log, are always produced.
-
-Old output files do not change by themselves: rerun curation. Updated code
-invalidates old completed-record checkpoints; matching LLM-response caches
-remain reusable where prompts and inputs still match.
-
-See [methodology](docs/methodology.md) for the routing and evidence rules.
-The workflow is inspired by Xie et al. (2025), not an exact replication or
-a claim of measured improvement. Six decimal places are formatting, not
-sub-metre accuracy; no per-record 10 km guarantee is claimed.
+See [methodology](docs/methodology.md) and the root v0.1.16 validation record.
+The point-radius approach follows the concepts of Chapman & Wieczorek (2020),
+with explicit VASCULUM assumptions and automated LLM extensions; it is not a
+claim of guaranteed accuracy or independent validation.

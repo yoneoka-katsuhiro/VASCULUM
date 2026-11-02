@@ -61,6 +61,8 @@ jobs:
         run: python tests/test_manual_review.py
       - name: Run ribbon provenance and R-rendering tests
         run: python tests/test_ribbon.py
+      - name: Run automatic acceptance, cache and SIGINT regressions
+        run: python tests/test_auto_acceptance.py
 
   shell-checks:
     runs-on: ubuntu-latest

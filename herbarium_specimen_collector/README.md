@@ -5,7 +5,7 @@ name, merges duplicate portal records that represent the same physical
 specimen, and downloads linked specimen images at a practical research
 resolution.
 
-Version: `v0.1.15`
+Version: `v0.1.16`
 
 ## Human Review With `miss_`
 
@@ -127,7 +127,7 @@ Use `--output PATH` to choose another output directory.
 ## Reusing Outputs From Earlier Releases
 
 Collector outputs created with recent releases, including v0.1.7 and v0.1.8,
-can be reused with v0.1.15. A reusable taxon directory should contain the DwC
+can be reused with v0.1.16. A reusable taxon directory should contain the DwC
 table and its image folder:
 
 ```text
@@ -281,6 +281,6 @@ terms.
 The source code is released under the MIT License. Downloaded data and images
 are not covered by the software license.
 
-The georeference curator retains documented existing coordinates. Otherwise,
+The georeference curator retains plausible existing coordinates without LLM work. Otherwise,
 new estimates require a local photograph and readable collecting-label evidence;
 DwC locality text alone is not a fallback.

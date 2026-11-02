@@ -98,3 +98,8 @@ class LlmResponseCache:
                 encoding="utf-8",
             )
             os.replace(temporary, destination)
+
+    def discard(self, key: str) -> None:
+        if self.enabled and len(key) == 64 and all(char in "0123456789abcdef" for char in key):
+            with self._lock:
+                (self.directory / f"{key}.json").unlink(missing_ok=True)

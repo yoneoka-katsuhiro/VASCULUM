@@ -84,4 +84,5 @@ def audit_candidates(candidates, auditor, timeout=None, deadline=None):
         candidate.source_checks = json.dumps(checks, ensure_ascii=False, separators=(",", ":"))
         # Reachability establishes provenance, never the truth of a locality match.
         if checks and not any(item["status"] == "reachable" for item in checks):
-            candidate.curation_reasons = "Source pages were not independently retrieved; review required"
+            candidate.confidence = "low"
+            candidate.curation_reasons = "Source retrieval unavailable; estimate retained with low confidence"
