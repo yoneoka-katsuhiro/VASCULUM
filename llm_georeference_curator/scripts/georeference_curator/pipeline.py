@@ -5,6 +5,7 @@ import json
 import math
 import re
 import time
+from collections import Counter
 from concurrent.futures import FIRST_COMPLETED, ThreadPoolExecutor, wait
 from dataclasses import asdict, dataclass, field, replace
 from datetime import datetime
@@ -40,7 +41,6 @@ from .llm import (
     apply_llm_label_fields,
     build_transcription_prompt,
     build_user_prompt,
-    build_xie_prompt,
     cache_prompt,
     configured_model_request,
     llm_response_to_candidates,
@@ -57,9 +57,10 @@ from .models import RunReport, CoordinateCandidate, CuratedResult
 from .outputs import merged_fieldnames, write_candidates, write_dwc_exports, write_json_log, write_summary
 from .parallel import RateLimitBackoff, is_rate_limit_error, resolve_worker_count
 from .progress import TerminalProgress
-from .scoring import SelectionOptions, original_coordinate_status, select_result
+from .scoring import SelectionOptions, candidate_base, original_coordinate_status, select_result
 from .policy import read_reference_regions
 from .sources import SourceAuditor, audit_candidates
+from .ribbon import prepare_ribbon_renderer, renderer_provenance, ribbon_counts, write_ribbon_plot
 
 
 def curator_version(project_dir: Path) -> str:
@@ -122,8 +123,6 @@ class RowOutcome:
 
 def protocol_text(
     version: str,
-    curation_mode: str,
-    prompt_profile: str,
     web_search_mode: str,
     use_trails: bool,
     use_hydrology: bool,
@@ -144,9 +143,9 @@ def protocol_text(
     habitat = f"; habitat_review_only={taxon_habitat}" if taxon_habitat else ""
     return (
         f"VASCULUM llm_georeference_curator {version}; "
-        f"curation_mode={curation_mode}; "
-        f"prompt_profile={prompt_profile}; web_search={web_search_mode}; "
-        f"evidence_priors={prior_text}{habitat}"
+        "export_policy=accepted_only; "
+        f"input_policy=photo_label_first; configured_web_search={web_search_mode}; "
+        f"configured_evidence={prior_text}{habitat}"
     )
 
 
@@ -217,23 +216,8 @@ def create_llm_json_with_backoff(
                 raise
 
 
-def coordinate_evidence_text(row, label) -> str:
-    separate_verbatim = ""
-    if row.get("verbatimLatitude") and row.get("verbatimLongitude"):
-        separate_verbatim = f"{row.get('verbatimSRS', '')} lat={row['verbatimLatitude']}, lon={row['verbatimLongitude']}"
-    return "\n".join(
-        str(value or "")
-        for value in (
-            label.label_transcription,
-            label.locality_text,
-            label.elevation_text,
-            separate_verbatim,
-            row.get("verbatimCoordinates"),
-            row.get("verbatimLatitude"),
-            row.get("verbatimLongitude"),
-        )
-        if str(value or "").strip()
-    )
+def coordinate_evidence_text(label) -> str:
+    return "\n".join(filter(None, (label.label_transcription, label.locality_text)))
 
 
 def record_llm_usage(outcome, response, settings, *, stage: str, cache_hit: bool):
@@ -245,6 +229,30 @@ def record_llm_usage(outcome, response, settings, *, stage: str, cache_hit: bool
         "usage": {} if cache_hit else response.get("_vasculum_usage", {}),
         "request": response.get("_vasculum_request", {}),
     })
+
+
+def screened_outcome(outcome, row, label, *, status, decision, reason):
+    candidate = CoordinateCandidate(
+        **candidate_base(label), candidate_source="input_screening",
+        curation_status=status, curation_reasons=reason,
+        decision=decision, verification_status=status,
+        original_latitude=row.get("decimalLatitude", ""),
+        original_longitude=row.get("decimalLongitude", ""),
+        original_datum=row.get("geodeticDatum", ""),
+        input_type=row.get("vasculumInputType", ""),
+        input_source=row.get("vasculumInputSource", ""),
+    )
+    outcome.result = CuratedResult(
+        row=dict(row, georeferenceVerificationStatus=status), candidates=[candidate],
+        decision=decision, verification_status=status, curation_status=status,
+        include_in_dwc=False, exclusion_reason=reason, notes=[reason],
+        original_coordinates={key: row.get(key, "") for key in (
+            "decimalLatitude", "decimalLongitude", "geodeticDatum", "coordinateUncertaintyInMeters")},
+        provenance={"inputPolicy": "photo_label_first"},
+        stage_errors=outcome.stage_errors, llm_usage=outcome.llm_usage,
+    )
+    outcome.candidates = [candidate]
+    return outcome
 
 
 def process_row(
@@ -266,10 +274,7 @@ def process_row(
     verification_timeout_seconds: int,
     habitat_preference,
     normalized_habitat: str,
-    original_precision_decimals: int,
-    exclude_insufficient_locality: bool,
     options: SelectionOptions,
-    prompt_profile: str,
     use_trails: bool,
     use_hydrology: bool,
     use_dem: bool,
@@ -302,10 +307,9 @@ def process_row(
         )
         outcome.result, outcome.candidates = result, [candidate]
         return outcome
-    baseline = options.georeference_method == "xie-baseline"
-    image_path = "" if baseline else find_image_path(source_dir, row)
-    label = read_label(row, catalog, image_path, {} if baseline else sidecars)
-    label.image_paths = [] if baseline else label_image_paths(source_dir, row, sidecars)
+    image_path = find_image_path(source_dir, row)
+    label = read_label(row, catalog, image_path, sidecars)
+    label.image_paths = label_image_paths(source_dir, row, sidecars)
     if label.image_paths:
         label.image_path = label.image_paths[0]
     label.occurrence_id = row.get("occurrenceID", "")
@@ -322,16 +326,18 @@ def process_row(
     elif image_quality.status.startswith("review_") or image_quality.status.endswith("_unknown"):
         outcome.image_review_records += 1
 
-    raw_coordinates = [] if baseline else extract_decimal_coordinates(coordinate_evidence_text(row, label))
-    gazetteer_matches = match_gazetteer(row, "\n".join([label.label_transcription, label.locality_text]), gazetteer)
-    insufficient_reason = insufficient_locality_reason(row, label)
-    llm_candidates = []
-    original_status = "missing" if baseline else original_coordinate_status(row, original_precision_decimals, options.reference_regions)
+    original_status = original_coordinate_status(row, options.reference_regions)
+    if original_status != "trusted" and not label.image_paths:
+        return screened_outcome(outcome, row, label, status="excluded",
+            decision="exclude_missing_source_image",
+            reason="No local specimen photograph and no trusted existing coordinates.")
+    raw_coordinates, gazetteer_matches, llm_candidates = [], [], []
+    insufficient_reason = ""
 
-    has_untranscribed_image = bool(image_quality.path and label.label_status in {"image_not_transcribed", "dwc_text_only"})
-    if original_status == "trusted" and (llm_client or transcription_llm_client):
+    has_untranscribed_image = bool(label.image_paths and label.label_status in {"image_not_transcribed", "dwc_text_only"})
+    if original_status == "trusted":
         outcome.llm_skipped_precise_original += 1
-    elif not baseline and has_untranscribed_image and transcription_llm_client:
+    elif has_untranscribed_image and transcription_llm_client:
         transcription_message = (
             f"Label transcription {transcription_llm_settings.provider}:"
             f"{selected_model_label(transcription_llm_settings)} "
@@ -372,40 +378,52 @@ def process_row(
                 outcome.llm_attempted -= 1
                 outcome.llm_transcription_requests -= 1
             apply_llm_label_fields(label, response)
-            raw_coordinates = extract_decimal_coordinates(coordinate_evidence_text(row, label))
-            gazetteer_matches = match_gazetteer(
-                row,
-                "\n".join([label.label_transcription, label.locality_text]),
-                gazetteer,
-            )
-            insufficient_reason = insufficient_locality_reason(row, label)
         except Exception as exc:
             outcome.llm_errors += 1
             outcome.errors.append(f"{catalog}: label transcription failed: {exc}")
             outcome.stage_errors.append({"stage": "label_reading", "retryable": True, "error": str(exc)})
 
+    if original_status != "trusted":
+        if outcome.stage_errors:
+            return screened_outcome(outcome, row, label, status="failed", decision="unresolved",
+                reason="Label reading failed; retry required. DwC locality is not a fallback.")
+        if label.label_status == "image_conflict":
+            return screened_outcome(outcome, row, label, status="review", decision="unresolved",
+                reason="Conflicting collecting events in specimen labels/views require human review.")
+        if label.label_status == "image_unreadable":
+            return screened_outcome(outcome, row, label, status="review", decision="unresolved",
+                reason="Collecting label is unreadable; no coordinate research was attempted.")
+        if label.label_status not in {"transcribed", "llm_image_transcribed"} or not (
+            label.label_transcription.strip() or label.locality_text.strip()
+        ):
+            return screened_outcome(outcome, row, label, status="unresolved", decision="unresolved",
+                reason="Specimen photograph has not yielded a label transcription.")
+        raw_coordinates = extract_decimal_coordinates(coordinate_evidence_text(label))
+        # DwC provides administrative context, never replacement label locality.
+        label_context = {key: row.get(key, "") for key in ("country", "stateProvince")}
+        insufficient_reason = insufficient_locality_reason(label_context, label)
+        if not label.locality_text.strip() and not any(is_precise_label_coordinate(value) for value in raw_coordinates):
+            return screened_outcome(outcome, row, label, status="review", decision="unresolved",
+                reason="No collecting locality could be read from the specimen label.")
+        if insufficient_reason and not any(is_precise_label_coordinate(value) for value in raw_coordinates):
+            outcome.llm_skipped_insufficient_locality += 1
+            return screened_outcome(outcome, row, label, status="excluded",
+                decision="exclude_insufficient_locality", reason=insufficient_reason)
+        gazetteer_matches = match_gazetteer(label_context,
+            "\n".join(filter(None, (label.label_transcription, label.locality_text))), gazetteer)
+
     precise_label_coordinates = [
         coordinate for coordinate in raw_coordinates if is_precise_label_coordinate(coordinate)
     ]
-    has_searchable_text = any(
-        str(value or "").strip()
-        for value in (
-            row.get("locality"),
-            row.get("verbatimLocality"),
-            row.get("municipality"),
-            row.get("county"),
-            label.locality_text,
-            label.label_transcription,
-        )
-    )
-    if baseline:
-        has_searchable_text = any(str(row.get(key, "")).strip() for key in ("country", "stateProvince", "county", "locality"))
+    has_searchable_text = bool(label.locality_text.strip() or label.label_transcription.strip())
     should_call_georeference_llm = bool(
         llm_client
         and original_status != "trusted"
         and not precise_label_coordinates
         and has_searchable_text
-        and (baseline or not insufficient_reason)
+        and not insufficient_reason
+        and bool(label.image_paths)
+        and label.label_status in {"transcribed", "llm_image_transcribed"}
     )
     if (
         llm_client
@@ -439,11 +457,9 @@ def process_row(
             ):
                 response, rate_retries, rate_waits, cache_hit = create_llm_json_with_backoff(
                     llm_client,
-                    build_xie_prompt(row) if baseline else build_user_prompt(
+                    build_user_prompt(
                         row,
                         label,
-                        normalized_habitat,
-                        prompt_profile=prompt_profile,
                         use_trails=use_trails,
                         use_hydrology=use_hydrology,
                         use_dem=use_dem,
@@ -481,7 +497,7 @@ def process_row(
         deadline_monotonic=time.monotonic() + verification_timeout_seconds,
         audit_records=[],
     )
-    if source_auditor is not None and not baseline and llm_candidates:
+    if source_auditor is not None and llm_candidates:
         with progress.activity(f"Source audit {catalog}", stage="Source audit", index=index, total=total_rows, catalog=catalog, model="HTTP source snapshots"):
             audit_candidates(llm_candidates, source_auditor, timeout=min(15, verification_timeout_seconds), deadline=row_refinement_settings.deadline_monotonic)
     for _refinement_index in range(
@@ -522,12 +538,12 @@ def process_row(
         llm_candidates=llm_candidates,
         gazetteer_matches=gazetteer_matches,
         insufficient_locality=insufficient_reason,
-        exclude_insufficient_locality=exclude_insufficient_locality,
         options=options,
     )
     result.stage_errors = outcome.stage_errors
-    result.provenance = {"method": options.georeference_method, "promptVersion": PROMPT_VERSION, "stages": outcome.llm_usage}
-    if not baseline and use_dem and row_refinement_settings.enabled and result.selected_candidate:
+    result.provenance = {"inputPolicy": "photo_label_first", "sourceEvidenceEligible": True,
+                         "promptVersion": PROMPT_VERSION, "stages": outcome.llm_usage}
+    if use_dem and row_refinement_settings.enabled and result.selected_candidate:
         try:
             with progress.activity(f"DEM elevation {catalog}", stage="Coordinate verification", index=index, total=total_rows, catalog=catalog, model="Open-Meteo/Copernicus DEM"):
                 elevation = selected_dem_elevation(result.selected_candidate, label, row_refinement_settings, refinement_cache)
@@ -544,11 +560,11 @@ def process_row(
         result.exclusion_reason = ""
         result.row["georeferenceVerificationStatus"] = "failed"
         result.row["georeferenceRemarks"] += "; processing_failed_retryable; not an insufficient-locality conclusion"
-        result.include_in_dwc = options.curation_mode == "standard"
+        result.include_in_dwc = False
         for candidate in result.candidates:
             candidate.decision = result.decision
             candidate.verification_status = result.verification_status
-    if habitat_preference.enabled and not baseline:
+    if habitat_preference.enabled:
         with progress.activity(
             f"Habitat review {index}/{total_rows} {catalog}",
             stage="Habitat review",
@@ -627,13 +643,15 @@ def aggregate_outcome(report: RunReport, outcome: RowOutcome):
             report.excluded_insufficient_locality += 1
         elif result.decision == "exclude_manual_misidentification":
             report.excluded_manual_misidentification += 1
-    if result.decision == "keep_original":
+        elif result.decision == "exclude_missing_source_image":
+            report.excluded_missing_source_image += 1
+    if result.include_in_dwc and result.decision == "keep_original":
         report.kept_original += 1
-    elif result.decision == "correct_existing":
+    elif result.include_in_dwc and result.decision == "correct_existing":
         report.corrected_existing += 1
-    elif result.decision == "infer_missing":
+    elif result.include_in_dwc and result.decision == "infer_missing":
         report.inferred_missing += 1
-    elif result.decision not in {"exclude_insufficient_locality", "exclude_manual_misidentification"}:
+    if result.curation_status == "unresolved":
         report.unresolved += 1
     if "review" in result.verification_status or result.habitat_review.get("status") == "warning":
         report.review_required += 1
@@ -647,10 +665,7 @@ def run_pipeline(
     label_tsv,
     gazetteer_tsv,
     dry_run: bool,
-    curation_mode: str,
-    original_precision_decimals: int,
     review_distance_km: float,
-    exclude_insufficient_locality: bool,
     llm_mode: str,
     llm_provider: str,
     llm_model: str,
@@ -658,28 +673,24 @@ def run_pipeline(
     llm_web_search: str,
     llm_command: str,
     llm_api_key_env: str,
-    llm_timeout_seconds: int,
     llm_rate_limit_retries: int,
     confirm_llm: bool,
     georeferenced_by: str,
-    prompt_profile: str,
     use_trails: bool,
     use_hydrology: bool,
     use_dem: bool,
     use_vegetation_prior: bool,
     taxon_habitat: str,
-    debug_log: bool,
     geospatial_refinement: bool = True,
     limit: int = 0,
     workers: str = "auto",
     llm_cache_enabled: bool = True,
     llm_cache_dir=None,
-    label_timeout_seconds=None,
-    georeference_timeout_seconds=None,
-    verification_timeout_seconds=None,
+    label_timeout_seconds=600,
+    georeference_timeout_seconds=600,
+    verification_timeout_seconds=600,
     label_model: str = "",
     label_reasoning_effort: str = "",
-    georeference_method: str | None = None,
     max_uncertainty_meters: float | None = None,
     label_coordinate_uncertainty_meters: float | None = None,
     reference_regions_tsv=None,
@@ -694,12 +705,7 @@ def run_pipeline(
     progress=None,
 ):
     load_env_file(project_dir / ".env")
-    if curation_mode not in {"standard", "robust"}:
-        raise ValueError("curation_mode must be one of: standard, robust")
     progress = progress or TerminalProgress()
-    method = georeference_method or ("xie-baseline" if prompt_profile == "xie" else "evidence-assisted")
-    if method not in {"xie-baseline", "evidence-assisted"}:
-        raise ValueError("Unknown georeference method")
     if max_llm_calls < 0:
         raise ValueError("max_llm_calls must not be negative")
     for name, value in (("max_uncertainty_meters", max_uncertainty_meters), ("label_coordinate_uncertainty_meters", label_coordinate_uncertainty_meters)):
@@ -712,14 +718,12 @@ def run_pipeline(
     if not source_dir.exists():
         raise FileNotFoundError(f"Input directory was not found: {source_dir}")
     bundle = load_inputs(source_dir, input_dwc=input_dwc, additional_inputs=additional_inputs,
-        include_personal=include_personal, import_unlinked_images=import_unlinked_images,
-        include_images=method != "xie-baseline")
+        include_personal=include_personal, import_unlinked_images=import_unlinked_images)
     dwc_path = bundle.dwc_path
     destination = output_dir.expanduser().resolve() if output_dir else default_output_dir(project_dir, source_dir).resolve()
     version = curator_version(project_dir)
     started_at = datetime.now().astimezone()
     report = RunReport(version=version, input_dir=source_dir, input_dwc=dwc_path, output_dir=destination, started_at=started_at)
-    report.curation_mode = curation_mode
     report.max_llm_calls = max_llm_calls
 
     rows, input_fieldnames = bundle.rows, bundle.fieldnames
@@ -730,20 +734,24 @@ def run_pipeline(
     report.input_warnings = bundle.warnings
     if limit and limit > 0:
         rows = rows[:limit]
-    sidecars = read_label_sidecar(label_tsv.expanduser().resolve() if label_tsv and method != "xie-baseline" else None)
+    sidecars = read_label_sidecar(label_tsv.expanduser().resolve() if label_tsv else None)
+    catalog_counts = Counter(catalog_number(row) for row in bundle.rows) if sidecars else {}
+    for catalog in sidecars:
+        if catalog_counts[catalog] > 1:
+            raise ValueError(f"Label sidecar catalogNumber {catalog!r} matches multiple input records. Use unique specimen identifiers; no label was attached by guessing.")
     for row in rows:
         sidecar = sidecars.get(catalog_number(row), {})
         markers = find_miss_markers(source_dir, row, explicit_media=sidecar.get("imagePath") or sidecar.get("image_path") or "")
         if markers:
             mark_misidentification(row, markers, source_dir)
-    gazetteer = read_gazetteer(gazetteer_tsv.expanduser().resolve() if gazetteer_tsv and method != "xie-baseline" else None)
-    label_timeout_seconds = label_timeout_seconds or llm_timeout_seconds
-    georeference_timeout_seconds = georeference_timeout_seconds or llm_timeout_seconds
-    verification_timeout_seconds = verification_timeout_seconds or llm_timeout_seconds
+    gazetteer = read_gazetteer(gazetteer_tsv.expanduser().resolve() if gazetteer_tsv else None)
 
+    needs_llm = any(not row.get("_vasculumMissMarkers") and
+        original_coordinate_status(row, reference_regions) != "trusted" and
+        label_image_paths(source_dir, row, sidecars) for row in rows)
     provider = normalize_provider(llm_provider or DEFAULT_LLM_PROVIDER)
     llm_settings = LlmSettings(
-        mode=llm_mode,
+        mode=llm_mode if needs_llm else "off",
         provider=provider,
         model=configured_model_request(provider, llm_model or DEFAULT_MODEL_AUTO),
         reasoning_effort=(
@@ -755,11 +763,11 @@ def run_pipeline(
         api_key_env=llm_api_key_env,
         command=llm_command or os.environ.get("LLM_COMMAND", ""),
         timeout_seconds=georeference_timeout_seconds,
-        web_search_mode="disabled" if method == "xie-baseline" else llm_web_search,
-        task_mode="xie_baseline" if method == "xie-baseline" else "georeference",
+        web_search_mode=llm_web_search,
+        task_mode="georeference",
     )
     validate_llm_settings(llm_settings)
-    llm_client = make_client(llm_settings)
+    llm_client = make_client(llm_settings) if needs_llm else None
     transcription_llm_settings = replace(
         llm_settings,
         model=label_model or os.environ.get("LLM_LABEL_MODEL") or llm_settings.model,
@@ -768,10 +776,8 @@ def run_pipeline(
         timeout_seconds=label_timeout_seconds,
         task_mode="transcription_only",
     )
-    transcription_llm_client = None
-    if method != "xie-baseline":
-        validate_llm_settings(transcription_llm_settings)
-        transcription_llm_client = make_client(transcription_llm_settings)
+    validate_llm_settings(transcription_llm_settings)
+    transcription_llm_client = make_client(transcription_llm_settings) if needs_llm else None
     cache_directory = (
         llm_cache_dir.expanduser().resolve()
         if llm_cache_dir
@@ -782,7 +788,7 @@ def run_pipeline(
         enabled=llm_cache_enabled,
     )
     refinement_settings = GeospatialRefinementSettings(
-        enabled=bool(geospatial_refinement and use_dem and method != "xie-baseline"),
+        enabled=bool(geospatial_refinement),
         use_routes=use_trails,
         timeout_seconds=verification_timeout_seconds,
         snapshot_directory=str(cache_directory / "geospatial"),
@@ -802,7 +808,6 @@ def run_pipeline(
     report.georeference_timeout_seconds = georeference_timeout_seconds
     report.verification_timeout_seconds = verification_timeout_seconds
     report.habitat_prior = normalized_habitat
-    report.georeference_method = method
     report.max_uncertainty_meters = max_uncertainty_meters
     worker_count = resolve_worker_count(
         workers,
@@ -820,6 +825,8 @@ def run_pipeline(
     if dry_run:
         report.finished_at = datetime.now().astimezone()
         return report
+    ribbon_renderer = prepare_ribbon_renderer(project_dir)
+    ribbon_runtime = renderer_provenance(project_dir, ribbon_renderer)
     progress.update(f"Input selection: {len(rows)} records | personal DwC={bundle.personal_dwc_records}, photo-only={bundle.photo_only_records}, additional photos={bundle.attached_personal_images}")
     if llm_client:
         progress.update(
@@ -833,8 +840,6 @@ def run_pipeline(
 
     protocol = protocol_text(
         version,
-        curation_mode,
-        prompt_profile,
         llm_settings.web_search_mode,
         use_trails,
         use_hydrology,
@@ -842,40 +847,15 @@ def run_pipeline(
         use_vegetation_prior,
         normalized_habitat,
     )
-    sources = "collector DwC | specimen label transcription"
-    if llm_client:
-        sources += f" | {llm_settings.provider}:{selected_model_label(llm_settings)}"
-        if llm_settings.web_search_mode != "disabled":
-            sources += f" | {llm_settings.web_search_mode} web search"
-    if gazetteer:
-        sources += " | local gazetteer"
-    if use_trails:
-        sources += " | trail prior"
-    if use_hydrology:
-        sources += " | hydrology prior"
-    if use_dem:
-        sources += " | DEM"
-    if use_vegetation_prior:
-        sources += " | recorded vegetation/locality evidence"
-    if refinement_settings.enabled:
-        sources += " | OpenStreetMap contributors (ODbL) environmental context"
-        if refinement_settings.use_routes:
-            sources += " and route geometry"
-        sources += " | Open-Meteo / Copernicus DEM GLO-90"
-
     options = SelectionOptions(
-        original_precision_decimals=original_precision_decimals,
         review_distance_km=review_distance_km,
-        curation_mode=curation_mode,
         georeferenced_by=georeferenced_by,
         georeferenced_date=started_at.date().isoformat(),
         protocol=protocol,
-        sources=sources,
         habitat_prior=normalized_habitat,
         max_uncertainty_meters=max_uncertainty_meters,
         label_coordinate_uncertainty_meters=label_coordinate_uncertainty_meters,
         reference_regions=reference_regions,
-        georeference_method=method,
     )
 
     progress.update(f"Reading {len(rows)} DwC record(s) from {dwc_path}")
@@ -905,16 +885,16 @@ def run_pipeline(
 
     configuration = {
         "implementation": implementation_signature(Path(__file__).parent),
-        "promptVersion": PROMPT_VERSION, "method": method,
+        "promptVersion": PROMPT_VERSION, "inputPolicy": "photo_label_first",
         "selection": asdict(options), "research": asdict(llm_settings),
         "transcription": asdict(transcription_llm_settings),
         "refinement": asdict(refinement_settings), "habitat": normalized_habitat,
-        "excludeInsufficientLocality": exclude_insufficient_locality,
         "sidecars": fingerprint(sidecars), "gazetteer": fingerprint([asdict(entry) for entry in gazetteer]),
         "sourceAudit": verify_source_urls,
         "effectiveResearchModels": model_candidates_for(llm_settings),
         "effectiveTranscriptionModels": model_candidates_for(transcription_llm_settings),
         "curatorVersion": version,
+        "ribbonRenderer": ribbon_runtime,
         "vasculumVersion": (project_dir.parent / "VERSION.txt").read_text().strip() if (project_dir.parent / "VERSION.txt").exists() else "unknown",
         "inputDwcSha256": file_hash(dwc_path) if dwc_path else "",
         "inputFiles": bundle.files,
@@ -925,7 +905,7 @@ def run_pipeline(
         command = configuration[stage].pop("command", "")
         configuration[stage]["commandHash"] = fingerprint(command)
     # Added/edited records invalidate only their own checkpoint, not every completed specimen.
-    journal_configuration = {key: value for key, value in configuration.items() if key not in {"inputDwcSha256", "inputFiles"}}
+    journal_configuration = {key: value for key, value in configuration.items() if key not in {"inputDwcSha256", "inputFiles", "ribbonRenderer"}}
     journal = RecordJournal(cache_directory / "runs", journal_configuration, enabled=resume and not refresh_sources)
     report.configuration = configuration
     report.checkpoint_path = str(journal.path) if journal.enabled else "disabled"
@@ -943,13 +923,13 @@ def run_pipeline(
         result = CuratedResult(
             row=dict(row, georeferenceVerificationStatus="failed"), candidates=[candidate],
             decision="unresolved", verification_status="failed_processing", curation_status="failed",
-            include_in_dwc=curation_mode != "robust", stage_errors=[error], original_coordinates=dict(row),
+            include_in_dwc=False, stage_errors=[error], original_coordinates=dict(row),
             provenance={"configurationHash": journal.configuration_hash, "inputRecordHash": fingerprint(row)},
         )
         return RowOutcome(index=index, result=result, candidates=[candidate], errors=[f"{catalog_number(row)}: {exc}"], stage_errors=[error])
 
     def run_record(index, row):
-        images = label_image_paths(source_dir, row, sidecars) if method != "xie-baseline" and not row.get("_vasculumMissMarkers") else []
+        images = label_image_paths(source_dir, row, sidecars) if not row.get("_vasculumMissMarkers") else []
         image_digests = [{"path": image, "sha256": file_hash((source_dir / image).resolve())} for image in images]
         image_digest = fingerprint(image_digests)
         key = fingerprint({"row": row, "images": image_digests})
@@ -976,9 +956,8 @@ def run_pipeline(
                 llm_rate_limit_retries=llm_rate_limit_retries, llm_backoff=llm_backoff,
                 refinement_settings=refinement_settings, verification_timeout_seconds=verification_timeout_seconds,
                 habitat_preference=habitat_preference, normalized_habitat=normalized_habitat,
-                original_precision_decimals=original_precision_decimals,
-                exclude_insufficient_locality=exclude_insufficient_locality, options=options,
-                prompt_profile=prompt_profile, use_trails=use_trails, use_hydrology=use_hydrology,
+                options=options,
+                use_trails=use_trails, use_hydrology=use_hydrology,
                 use_dem=use_dem, use_vegetation_prior=use_vegetation_prior, progress=progress,
                 source_auditor=auditor,
             )
@@ -1056,11 +1035,20 @@ def run_pipeline(
     fieldnames = merged_fieldnames(input_fieldnames)
     write_dwc_exports(destination, curated_rows, fieldnames)
     write_candidates(destination, all_candidates)
-    if debug_log:
-        write_json_log(destination / "georeference.log.jsonl", results)
+    write_json_log(destination / "georeference.log.jsonl", results)
     report.records_written = len(curated_rows)
     report.llm_provider_attempts = llm_backoff.calls
     report.candidate_rows = len(all_candidates)
+    try:
+        report.ribbon_counts = ribbon_counts(rows, results, source_dir, dwc_path,
+            complete_input=not limit and not additional_inputs and not bundle.personal_dwc_records and not bundle.photo_only_records)
+        with progress.activity("Ribbon plot", stage="Ribbon plot", model="R/ggalluvial"):
+            report.ribbon_path = str(write_ribbon_plot(project_dir, destination, report.ribbon_counts, ribbon_renderer))
+    except Exception as exc:
+        old_plot = destination / "georeference_flow.pdf"
+        if old_plot.is_file():
+            old_plot.unlink()
+        report.errors.append(f"Ribbon plot: {exc}. DwC, candidate TSV and log were preserved.")
     report.finished_at = datetime.now().astimezone()
     write_summary(destination / "summary.txt", report)
     progress.update(f"Complete - {destination}")

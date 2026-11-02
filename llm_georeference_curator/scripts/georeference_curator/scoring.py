@@ -4,7 +4,7 @@ import json
 import math
 from dataclasses import dataclass, field
 
-from .elevation import parse_elevation_meters, round_elevation
+from .elevation import parse_elevation_meters, round_elevation, specimen_elevation
 from .geocoding import haversine_km, is_precise_label_coordinate, parse_decimal, valid_lat_lon
 from .models import CoordinateCandidate, CuratedResult
 from .policy import (
@@ -19,21 +19,17 @@ INFERRED_ELEVATION_GRANULARITY_METERS = 10
 
 @dataclass
 class SelectionOptions:
-    original_precision_decimals: int = 4  # Deprecated: never establishes trust.
     review_distance_km: float = 5.0
-    curation_mode: str = "standard"
     georeferenced_by: str = "VASCULUM llm_georeference_curator"
     georeferenced_date: str = ""
     protocol: str = ""
-    sources: str = ""
     habitat_prior: str = ""
     max_uncertainty_meters: float | None = None
     label_coordinate_uncertainty_meters: float | None = None
     reference_regions: list = field(default_factory=list)
-    georeference_method: str = "evidence-assisted"
 
 
-def original_coordinate_status(row, precision_decimals=4, reference_regions=None) -> str:
+def original_coordinate_status(row, reference_regions=None) -> str:
     lat, lon = parse_decimal(row.get("decimalLatitude", "")), parse_decimal(row.get("decimalLongitude", ""))
     if lat is None or lon is None:
         return "missing"
@@ -133,19 +129,24 @@ def gazetteer_coordinate_candidates(matches, label):
         entry = match.entry
         radius = positive_number(entry.uncertainty_meters)
         geometry = ""
+        valid_extent = True
         if entry.bounds:
+            valid_extent = False
             try:
                 bounds = json.loads(entry.bounds)
                 if len(bounds) == 4:
                     geometry = json.dumps({"type": "bbox", "coordinates": bounds})
-                    radius = extent_uncertainty(float(entry.latitude), float(entry.longitude), geometry)
+                    extent = extent_uncertainty(float(entry.latitude), float(entry.longitude), geometry)
+                    valid_extent = extent is not None
+                    if radius and valid_extent:
+                        radius = max(radius, extent)
             except (ValueError, TypeError):
                 pass
         candidate = CoordinateCandidate(
             **candidate_base(label), candidate_latitude=str(entry.latitude), candidate_longitude=str(entry.longitude),
             candidate_geodetic_datum=entry.geodetic_datum,
             candidate_uncertainty_meters=str(radius or ""), candidate_elevation_meters=entry.elevation_meters,
-            uncertainty_basis="verified_reference_extent" if entry.verified and radius else "unverified_reference",
+            uncertainty_basis="verified_reference_extent" if entry.verified and radius and valid_extent else "unverified_reference",
             support_status="verified_reference" if entry.verified else "gazetteer_name_match",
             supporting_geometry=geometry, candidate_type="place_centroid", modern_place_name=entry.place_name,
             historical_place_name=entry.historical_place_name, match_language=entry.language,
@@ -192,13 +193,12 @@ def best_candidate(candidates):
 
 
 def select_result(row, label, raw_label_coordinates, llm_candidates, gazetteer_matches,
-                  insufficient_locality, exclude_insufficient_locality, options):
-    status = original_coordinate_status(row, options.original_precision_decimals, options.reference_regions)
-    original = original_candidate(row, label, status) if options.georeference_method != "xie-baseline" else None
+                  insufficient_locality, options):
+    status = original_coordinate_status(row, options.reference_regions)
+    original = original_candidate(row, label, status)
     candidates = ([original] if original else [])
-    if options.georeference_method != "xie-baseline":
-        candidates.extend(label_coordinate_candidates(raw_label_coordinates, label, options))
-        candidates.extend(gazetteer_coordinate_candidates(gazetteer_matches, label))
+    candidates.extend(label_coordinate_candidates(raw_label_coordinates, label, options))
+    candidates.extend(gazetteer_coordinate_candidates(gazetteer_matches, label))
     for candidate in llm_candidates:
         convert_candidate(candidate)
         candidates.append(candidate)
@@ -221,7 +221,7 @@ def select_result(row, label, raw_label_coordinates, llm_candidates, gazetteer_m
                 curation_status = "review"
                 notes.append(f"Conflicting documented coordinate is {distance:.3f} km away")
     evaluated = not label.image_path or label.label_status in {"transcribed", "llm_image_transcribed", "llm_text_augmented"}
-    excluded = bool(options.georeference_method != "xie-baseline" and exclude_insufficient_locality and insufficient_locality and evaluated and not (selected and selected.curation_status == "accepted"))
+    excluded = bool(insufficient_locality and evaluated and not (selected and selected.curation_status == "accepted"))
     if excluded:
         curation_status = "excluded"
         selected = None
@@ -232,7 +232,7 @@ def select_result(row, label, raw_label_coordinates, llm_candidates, gazetteer_m
         decision = "keep_original" if selected is original else "infer_missing" if status == "missing" else "correct_existing"
     kind = selected.candidate_type if selected else "none"
     verification = f"{curation_status}_{kind}"
-    include = curation_status != "excluded" and (options.curation_mode != "robust" or curation_status == "accepted")
+    include = curation_status == "accepted"
     curated = dict(row)
     for key in ("decimalLatitude", "decimalLongitude", "coordinateUncertaintyInMeters", "geodeticDatum"):
         curated[key] = ""
@@ -240,17 +240,29 @@ def select_result(row, label, raw_label_coordinates, llm_candidates, gazetteer_m
         curated.update(decimalLatitude=selected.candidate_latitude, decimalLongitude=selected.candidate_longitude,
                        geodeticDatum=selected.candidate_geodetic_datum,
                        coordinateUncertaintyInMeters=selected.candidate_uncertainty_meters if selected.uncertainty_basis in {"documented_original", "documented_label", "verified_reference_extent", "mapped_locality_extent"} else "")
-        curated.update(georeferencedBy=options.georeferenced_by, georeferencedDate=options.georeferenced_date,
-                       georeferenceProtocol=options.protocol, georeferenceSources=selected.source_urls or options.sources)
         if selected is original:
+            actual_sources = row.get("georeferenceSources") or row.get("vasculumCoordinateSource") or row.get("references") or "original DwC"
+        elif selected.candidate_type == "verbatim_coordinate":
+            actual_sources = " | ".join(f"specimen photograph: {path}" for path in label.image_paths) or "specimen label transcription"
+        else:
+            actual_sources = selected.source_urls or selected.candidate_source
+        curated.update(georeferencedBy=options.georeferenced_by, georeferencedDate=options.georeferenced_date,
+                       georeferenceProtocol=options.protocol, georeferenceSources=actual_sources)
+        if selected is original:
+            for key in ("georeferencedBy", "georeferencedDate"):
+                curated[key] = row.get(key) or curated[key]
             curated["georeferenceProtocol"] = "; ".join(filter(None, (options.protocol, row.get("georeferenceProtocol", ""))))
-            curated["georeferenceSources"] = " | ".join(filter(None, (row.get("georeferenceSources", ""), curated["georeferenceSources"])))
     curated["georeferenceVerificationStatus"] = curation_status
-    minimum, maximum = parse_elevation_meters(label.elevation_text or label.label_transcription or row.get("verbatimElevation", ""))
+    minimum, maximum = specimen_elevation(label)
     elevation_note = ""
+    if minimum is not None:
+        elevation_note = "elevation_source=specimen_label"
+    else:
+        minimum, maximum = parse_elevation_meters(row.get("verbatimElevation", ""))
+        if minimum is not None:
+            elevation_note = "elevation_source=original_dwc"
     if minimum is not None and maximum is not None:
         curated["minimumElevationInMeters"], curated["maximumElevationInMeters"] = str(minimum), str(maximum)
-        elevation_note = "elevation_source=specimen_label"
     elif selected:
         elevation = parse_decimal(selected.candidate_elevation_meters)
         if elevation is not None and math.isfinite(elevation):
@@ -263,6 +275,7 @@ def select_result(row, label, raw_label_coordinates, llm_candidates, gazetteer_m
     curated["georeferenceRemarks"] = "; ".join(filter(None, (
         f"VASCULUM decision={decision}", f"verification={verification}", f"curation_status={curation_status}",
         f"label_status={label.label_status}", elevation_note, *notes,
+        row.get("georeferenceRemarks", "") if selected is original else "",
     )))
     if not candidates:
         candidates.append(CoordinateCandidate(**candidate_base(label), candidate_source="none", curation_status=curation_status))

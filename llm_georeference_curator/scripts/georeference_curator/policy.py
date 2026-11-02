@@ -81,8 +81,9 @@ def rounding_radius(latitude_text, longitude_text):
     if latitude is None:
         return None
     try:
-        north = 111320 * half_step(latitude_text)
-        east = 111320 * abs(math.cos(math.radians(latitude))) * half_step(longitude_text)
+        latitude_step = half_step(latitude_text)
+        north = 111700 * latitude_step
+        east = 111320 * abs(math.cos(math.radians(max(0, abs(latitude) - latitude_step)))) * half_step(longitude_text)
     except (InvalidOperation, ValueError, OverflowError):
         return None
     return max(1, math.ceil(math.hypot(north, east)))
@@ -149,13 +150,9 @@ def extent_uncertainty(latitude, longitude, geometry_text):
             if not in_bounds(latitude, longitude, south, west, north, east):
                 return None
             # Meridian-plus-parallel path is a conservative bound for the full box.
-            radius = 111320 * (max(latitude - south, north - latitude) + max(longitude - west, east - longitude))
+            radius = 111700 * max(latitude - south, north - latitude) + 111320 * max(longitude - west, east - longitude)
             return max(1, math.ceil(radius))
-        if not points:
-            return None
-        if any(not valid_lat_lon(float(point[1]), float(point[0])) for point in points):
-            return None
-        radius = max(haversine_km(latitude, longitude, float(point[1]), float(point[0])) * 1000 for point in points)
-        return max(1, math.ceil(radius)) if math.isfinite(radius) else None
+        # Unspecified vertices do not establish coverage of a line or polygon.
+        return None
     except (ValueError, TypeError, KeyError, IndexError, AttributeError):
         return None

@@ -49,24 +49,16 @@ def read_table(path: Path):
 def read_label_sidecar(path):
     if not path:
         return {}
-    delimiter = delimiter_for(path)
-    with path.open(encoding="utf-8-sig", newline="") as handle:
-        reader = csv.DictReader(handle, delimiter=delimiter)
-        result = {}
-        for row in reader:
-            normalized = {
-                key: "" if value is None else value for key, value in row.items()
-            }
-            catalog = first_present(
-                normalized,
-                "catalogNumber",
-                "catalog_number",
-                "specimenCode",
-                "specimen_code",
-            )
-            if catalog and catalog not in result:
-                result[catalog] = normalized
-        return result
+    rows, _ = read_table(path)
+    result = {}
+    for row in rows:
+        catalog = first_present(row, "catalogNumber", "catalog_number", "specimenCode", "specimen_code")
+        if not catalog:
+            raise ValueError(f"Every label sidecar row needs a catalogNumber: {path}")
+        if catalog in result:
+            raise ValueError(f"Duplicate label sidecar catalogNumber {catalog!r}: {path}. No transcription was selected by guessing.")
+        result[catalog] = row
+    return result
 
 
 def first_present(row, *names) -> str:

@@ -1,20 +1,16 @@
 # VASCULUM
 
-**An open, auditable toolkit for digital herbarium workflows: specimen
-discovery, evidence-based georeferencing, and regional checklist publishing.**
+Version: `v0.1.15`
 
-Version: `v0.1.14`
-
-[Release notes](RELEASE_NOTES_v0.1.14.md) describe the georeferencing, personal-input
+[Release notes](RELEASE_NOTES_v0.1.15.md) describe the georeferencing, personal-input
 and human specimen-review updates in this release.
+See the [validation record](VALIDATION_v0.1.15.md) for checks performed and
+scientific claims that have not been validated.
 
 Repository: <https://github.com/yoneoka-katsuhiro/VASCULUM>
 
-VASCULUM connects three standalone programs. Use the collector to gather
-specimen records and images by scientific name, the georeference curator to
-turn labels and locality evidence into reviewable coordinate decisions, and
-CheckList to publish place-based species lists and illustrated voucher guides.
-Each program can be used independently or as part of one reproducible workflow.
+VASCULUM is a collection of pipelines for retrieving, curating, and organizing
+digital herbarium specimen records and images.
 
 The name refers to a vasculum, a portable botanical collecting case used to hold
 plant specimens during fieldwork. This repository is intended to function as a
@@ -27,21 +23,17 @@ VASCULUM can also be read as:
 Voucher Archive Search and Curation for Unified Large-scale Use of Metadata
 ```
 
-## Programs At A Glance
+## Pipelines
 
-| Program | What it does | Main outputs |
-| --- | --- | --- |
-| [`herbarium_specimen_collector/`](herbarium_specimen_collector/) | Searches multiple specimen portals by scientific name, reconciles duplicate records, and downloads linked herbarium images. | Darwin Core CSV/TSV, specimen images, retrieval summary |
-| [`llm_georeference_curator/`](llm_georeference_curator/) | Reads specimen labels and locality metadata, researches place evidence, and produces auditable coordinate decisions with optional LLM assistance. | Curated Darwin Core CSV/TSV, candidate review table, summary and JSONL audit log |
-| [`checklist/`](checklist/) | Reverse-searches plants by place, builds an accepted species list, and selects representative voucher images for a regional checklist. | Species CSV/TSV, illustrated PDF, evidence and provenance files |
-
-The collector and curator are designed for specimen-centered research. CheckList
-is designed for floras, museums, herbaria, field sites, and regional biodiversity
-projects that need a place-centered species list or illustrated guide.
+| Directory | Purpose |
+| --- | --- |
+| `herbarium_specimen_collector/` | Retrieve and integrate Darwin Core (DwC)-oriented herbarium specimen datasets and associated specimen images from multiple digital archives. |
+| `llm_georeference_curator/` | Preserve documented coordinates or perform LLM-assisted georeferencing from linked specimen photographs, with auditable evidence and coordinate candidates. |
+| `checklist/` | Build species lists from geographic conditions and generate visual checklist PDFs from herbarium specimen records and images. |
 
 ## Setup
 
-Use the `VASCULUM-v0.1.14.zip` distribution archive. It expands to a clean
+Use the v0.1.15 ZIP distribution archive. It expands to a clean
 `VASCULUM/` directory. Once published, release assets are available from GitHub Releases.
 
 ```bash
@@ -50,7 +42,8 @@ bash setup_mac.sh
 bash check_release.sh
 ```
 
-The setup script prepares an isolated Python environment for each pipeline. The
+Install [R](https://cran.r-project.org/) before setup. The setup script prepares
+an isolated Python environment for each pipeline and the curator's R plotting packages. The
 release check runs syntax checks, offline tests, CLI smoke tests, and a basic
 secret scan without sending specimen data to external services.
 
@@ -99,7 +92,7 @@ Use curator `--export-images` to build a final `images/` folder containing only
 included specimens alongside the modified DwC. No marked image or photo of a
 marked specimen is copied there. Reruns synchronize previously managed copies,
 including removal of an earlier copy after you mark its input photograph.
-See [manual exclusion instructions](llm_georeference_curator/README.md#exclude-misidentified-specimens-with-miss_).
+See [manual exclusion instructions](llm_georeference_curator/README.md#remove-misidentifications-visually).
 
 The CheckList pipeline reverse-searches species from a country or
 coordinate-radius condition, selects representative herbarium specimen images,
@@ -160,7 +153,6 @@ cd llm_georeference_curator
 
 bash run_llm_georeference_curator.sh \
   --input ../herbarium_specimen_collector/output/Haplopteris_mediosora \
-  --robust \
   --habitat "subalpine forest" \
   --limit 10 \
   --llm-mode on
@@ -168,7 +160,9 @@ bash run_llm_georeference_curator.sh \
 
 The curator reads `dwc.csv` or `dwc.tsv` and local specimen images, then writes
 `modified_dwc.csv`, `modified_dwc.tsv`, `georeference_candidates.tsv`,
-`summary.txt`, and `georeference.log.jsonl`.
+`summary.txt`, `georeference.log.jsonl`, and `georeference_flow.pdf`.
+The ribbon PDF uses one R/ggalluvial renderer, fixed source grays and 50% opacity.
+Install R before running setup; setup prepares the required R packages.
 
 See `llm_georeference_curator/README.md` for LLM provider setup, habitat
 advisory warnings, caching, parallel processing, and review notes. Species-wide
@@ -187,7 +181,8 @@ herbarium_specimen_collector/output/<run>/personal/images/MY0001__label.jpg
 ```
 
 These are included automatically. Photo-only groups become personal records;
-DwC-only records can be researched from locality text. Both whole images in a
+DwC-only records are retained only when existing coordinates are trusted.
+New coordinate estimates require a linked local photograph. Both whole images in a
 named group are passed to label reading. External collections can be added
 with repeatable curator `--additional-input PATH`. Personal input provenance
 and image hashes are retained alongside portal-derived records.
@@ -204,22 +199,24 @@ for identifiers, image grouping, duplicate checks and examples.
 The georeferencing core is inspired by
 [Xie et al. (2025)](https://doi.org/10.1038/s41477-025-02162-y), while image
 transcription, geographic research and advisory ecological checks are explicit
-VASCULUM extensions. A text-only one-shot baseline is available for comparison;
-it is not an exact replication of the original model/prompt experiment.
+VASCULUM extensions. This is not an exact replication of the original experiment.
+There is one input policy: keep trusted original coordinates; otherwise require
+and read the source photograph. Unreadable/broad labels do not fall back to
+DwC locality text. No-photo records with untrusted/missing coordinates are excluded.
 
 Reproducibility and later auditing are design requirements: preserve the input
-DwC/images, five primary outputs and private response/snapshot caches. Logs
+DwC/images, six primary outputs and private response/snapshot caches. Logs
 record before/after coordinates, actual models, complete prompts, timestamps,
 code/input/image hashes, sources and stage errors. Completed-record checkpoints
 allow cached replay. Fresh LLM calls and changing web sources are not guaranteed
 to reproduce identical answers. See the
-[16-point methodology and evaluation protocol](llm_georeference_curator/docs/methodology.md).
+[photo-first methodology](llm_georeference_curator/docs/methodology.md).
 
 Six-decimal coordinates do not imply sub-meter accuracy. The study's reported
 error statistic is not an individual 10 km guarantee, and this extension has
 not yet demonstrated improved positional accuracy on an independent benchmark.
-`--robust` exports accepted records only; model-only estimates remain review
-proposals until their locality support, datum and uncertainty are justified.
+The final DwC always exports accepted records only, without a mode switch;
+model-only estimates remain review proposals until their locality support, datum and uncertainty are justified.
 
 The collector and curator can be connected with `run_collect_and_georeference.sh`
 when a single combined command is useful, but the two workflows are usually

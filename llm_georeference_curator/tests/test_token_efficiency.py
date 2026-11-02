@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import csv
 import json
+import os
 import subprocess
 import sys
 import tempfile
@@ -34,6 +35,9 @@ from georeference_curator.pipeline import create_llm_json_with_backoff, run_pipe
 from georeference_curator.progress import TerminalProgress
 
 
+from test_offline import write_label_photos
+
+
 class TokenEfficiencyTests(unittest.TestCase):
     def test_stage_contracts(self):
         transcription = LlmSettings(task_mode="transcription_only", web_search_mode="disabled")
@@ -41,20 +45,19 @@ class TokenEfficiencyTests(unittest.TestCase):
         self.assertIn("labelTranscription", response_schema(transcription)["properties"])
         self.assertNotIn("coordinateCandidates", response_schema(transcription)["properties"])
         self.assertEqual(set(response_schema(research)["properties"]), {"status", "coordinateCandidates", "remarks"})
-        prompt = build_user_prompt({"country": "Japan"}, LabelRead(), "forest")
+        prompt = build_user_prompt({"country": "Japan"}, LabelRead())
         self.assertIn("Do not repeat or revise the transcription", prompt)
         self.assertNotEqual(cache_prompt(transcription, prompt), cache_prompt(research, prompt))
 
     def test_request_identity_preserves_geographic_context(self):
         row = {"catalogNumber": "A", "country": "Japan", "eventDate": "1901"}
         label = LabelRead(label_transcription="Mt. Example trail, 2000 m")
-        prompt = build_user_prompt(row, label, "forest")
-        self.assertEqual(prompt, build_user_prompt(dict(row, catalogNumber="B"), label, "forest"))
+        prompt = build_user_prompt(row, label)
+        self.assertEqual(prompt, build_user_prompt(dict(row, catalogNumber="B"), label))
         for changed in (dict(row, country="China"), dict(row, eventDate="2001"), dict(row, decimalLatitude="35.1")):
-            self.assertNotEqual(prompt, build_user_prompt(changed, label, "forest"))
-        self.assertEqual(prompt, build_user_prompt(row, label, "river"))
-        self.assertEqual(prompt, build_user_prompt(dict(row, scientificName="Example species"), label, "river"))
-        self.assertNotEqual(prompt, build_user_prompt(dict(row, habitat="Recorded forest"), label, "forest"))
+            self.assertNotEqual(prompt, build_user_prompt(changed, label))
+        self.assertEqual(prompt, build_user_prompt(dict(row, scientificName="Example species"), label))
+        self.assertNotEqual(prompt, build_user_prompt(dict(row, habitat="Recorded forest"), label))
         self.assertEqual(
             build_transcription_prompt(row, label),
             build_transcription_prompt(dict(row, catalogNumber="B"), label),
@@ -86,6 +89,8 @@ class TokenEfficiencyTests(unittest.TestCase):
 
         def fake_run(args, **kwargs):
             self.assertIn("--json", args)
+            self.assertNotIn("--ignore-rules", args)
+            self.assertNotIn("--dangerously-bypass-approvals-and-sandbox", args)
             self.assertEqual(args[args.index("-m") + 1], "gpt-6.1-sol")
             self.assertIn('model_reasoning_effort="medium"', args)
             schema = json.loads(Path(args[args.index("--output-schema") + 1]).read_text())
@@ -174,6 +179,7 @@ class TokenEfficiencyTests(unittest.TestCase):
                 writer = csv.DictWriter(handle, fieldnames=fields, delimiter="\t")
                 writer.writeheader()
                 writer.writerows(dict(catalogNumber=name, country="Japan", locality="Mt. Example trail", eventDate="1901") for name in ("A", "B"))
+            labels = write_label_photos(root, [dict(catalogNumber=name, labelTranscription="Mt. Example trail", localityText="Mt. Example trail") for name in ("A", "B")], input_dir=source)
             clients = []
 
             def make_client(settings):
@@ -181,15 +187,15 @@ class TokenEfficiencyTests(unittest.TestCase):
                 clients.append(client)
                 return client
 
-            with patch.dict("os.environ", {}, clear=True), patch("georeference_curator.llm.command_available", return_value=True), patch("georeference_curator.pipeline.make_client", side_effect=make_client), patch("georeference_curator.pipeline.preflight_llm"):
+            with patch.dict("os.environ", {"PATH": os.environ.get("PATH", os.defpath)}, clear=True), patch("georeference_curator.llm.command_available", return_value=True), patch("georeference_curator.pipeline.make_client", side_effect=make_client), patch("georeference_curator.pipeline.preflight_llm"):
                 report = run_pipeline(
-                    project_dir=root, input_dir=source, input_dwc=None, output_dir=root / "out", label_tsv=None, gazetteer_tsv=None,
-                    dry_run=False, curation_mode="robust", original_precision_decimals=4, review_distance_km=5,
-                    exclude_insufficient_locality=True, llm_mode="on", llm_provider="codex-cli", llm_model="gpt-6.1-sol",
+                    project_dir=root, input_dir=source, input_dwc=None, output_dir=root / "out", label_tsv=labels, gazetteer_tsv=None,
+                    dry_run=False, review_distance_km=5,
+                    llm_mode="on", llm_provider="codex-cli", llm_model="gpt-6.1-sol",
                     llm_reasoning_effort="", llm_web_search="live", llm_command="/bin/true", llm_api_key_env="OPENAI_API_KEY",
-                    llm_timeout_seconds=600, llm_rate_limit_retries=0, confirm_llm=False, georeferenced_by="test",
-                    prompt_profile="xie-modified", use_trails=True, use_hydrology=True, use_dem=False, use_vegetation_prior=True,
-                    taxon_habitat="forest", debug_log=True, workers="2", progress=TerminalProgress(False),
+                    llm_rate_limit_retries=0, confirm_llm=False, georeferenced_by="test",
+                    use_trails=True, use_hydrology=True, use_dem=False, use_vegetation_prior=True,
+                    taxon_habitat="forest", workers="2", progress=TerminalProgress(False),
                     label_model="gpt-6.1-terra", label_reasoning_effort="low",
                 )
             self.assertEqual(clients[0].calls, 1)

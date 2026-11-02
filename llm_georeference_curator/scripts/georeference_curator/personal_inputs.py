@@ -38,7 +38,7 @@ def personal_occurrence_id(input_dir, *parts):
 
 
 def load_inputs(input_dir, *, input_dwc=None, additional_inputs=(), include_personal=True,
-                import_unlinked_images=False, include_images=True):
+                import_unlinked_images=False):
     bundle = InputBundle()
     sources, image_roots, seen_files = [], [], set()
     base_exists = input_dwc or any((input_dir / name).is_file() for name in ("dwc.tsv", "dwc.csv"))
@@ -96,7 +96,7 @@ def load_inputs(input_dir, *, input_dwc=None, additional_inputs=(), include_pers
         root = Path(row.get("_vasculumImageRoot") or input_dir)
         for item in existing:
             if not row.get("_vasculumMissMarkers") and not item.startswith(("http://", "https://")) and not (root / Path(item).expanduser()).is_file():
-                bundle.warnings.append(f"Local image not found for {catalog_number(row)} in {row['vasculumInputSource']}: {item}. Available DwC locality text can still be processed.")
+                bundle.warnings.append(f"Local image not found for {catalog_number(row)} in {row['vasculumInputSource']}: {item}. Without a local photo, only trusted existing coordinates can be retained.")
         resolved = [item if item.startswith(("http://", "https://")) else display_image_path(input_dir, root / Path(item).expanduser()) for item in existing]
         resolved.extend(display_image_path(input_dir, path) for path in paths)
         row["associatedMedia"] = " | ".join(dict.fromkeys(resolved))
@@ -105,56 +105,55 @@ def load_inputs(input_dir, *, input_dwc=None, additional_inputs=(), include_pers
         if source and source not in row["vasculumInputSource"].split(" | "):
             row["vasculumInputSource"] += " | " + source
 
-    if include_images:
-        claimed = set()
-        owners = {}
-        for index, row in enumerate(bundle.rows):
-            paths = [((input_dir / path).resolve()) for path in find_image_paths(input_dir, row)]
-            for path in paths:
-                if path in owners:
-                    raise ValueError(f"Image {path} is linked or name-matched to multiple records ({owners[path]} and {catalog_number(row)}). Use unique associatedMedia links or distinct image names to disambiguate specimens.")
-                owners[path] = catalog_number(row) or f"row {index + 1}"
+    claimed = set()
+    owners = {}
+    for index, row in enumerate(bundle.rows):
+        paths = [((input_dir / path).resolve()) for path in find_image_paths(input_dir, row)]
+        for path in paths:
+            if path in owners:
+                raise ValueError(f"Image {path} is linked or name-matched to multiple records ({owners[path]} and {catalog_number(row)}). Use unique associatedMedia links or distinct image names to disambiguate specimens.")
+            owners[path] = catalog_number(row) or f"row {index + 1}"
+        claimed.update(paths)
+        attach(row, paths, source="")
+    if import_unlinked_images:
+        image_roots.append(input_dir / "images")
+    for image_root in dict.fromkeys(path.resolve() for path in image_roots):
+        if not image_root.is_dir():
+            continue
+        groups = {}
+        for path in sorted(image_root.rglob("*")):
+            if path.is_file() and path.suffix.lower() in IMAGE_SUFFIXES and path.resolve() not in claimed:
+                groups.setdefault((path.parent, photo_code(path.with_name(unmarked_image_name(path)))), []).append(path.resolve())
+        for (directory, code), paths in groups.items():
+            marked_paths = [path for path in paths if is_miss_image(path)]
+            normal_paths = [path for path in paths if not is_miss_image(path)]
+            matches = [row for row in bundle.rows if row.get("vasculumInputType") != "personal_photo" and catalog_number(row).casefold() == code.casefold()]
+            if len(matches) > 1:
+                raise ValueError(f"Personal image group {directory / code} matches multiple catalog numbers. Link images explicitly using associatedMedia; no ambiguous attachment was made.")
+            if matches:
+                attach(matches[0], normal_paths, source=source_name(input_dir, directory))
+                if marked_paths:
+                    mark_misidentification(matches[0], marked_paths, input_dir)
+                bundle.attached_personal_images += len(normal_paths)
+            else:
+                namespace = source_name(input_dir, directory / code)
+                identity = personal_occurrence_id(input_dir, namespace, "photo-only")
+                if identity in identities:
+                    raise ValueError(f"Conflicting personal image identity: {namespace}")
+                identities[identity] = namespace
+                row = {"occurrenceID": identity, "catalogNumber": code, "basisOfRecord": "PreservedSpecimen",
+                    "vasculumInputType": "personal_photo", "vasculumInputSource": namespace,
+                    "_vasculumImageRoot": str(input_dir)}
+                attach(row, normal_paths, source="")
+                if marked_paths:
+                    mark_misidentification(row, marked_paths, input_dir)
+                bundle.rows.append(row)
+                bundle.photo_only_records += 1
             claimed.update(paths)
-            attach(row, paths, source="")
-        if import_unlinked_images:
-            image_roots.append(input_dir / "images")
-        for image_root in dict.fromkeys(path.resolve() for path in image_roots):
-            if not image_root.is_dir():
-                continue
-            groups = {}
-            for path in sorted(image_root.rglob("*")):
-                if path.is_file() and path.suffix.lower() in IMAGE_SUFFIXES and path.resolve() not in claimed:
-                    groups.setdefault((path.parent, photo_code(path.with_name(unmarked_image_name(path)))), []).append(path.resolve())
-            for (directory, code), paths in groups.items():
-                marked_paths = [path for path in paths if is_miss_image(path)]
-                normal_paths = [path for path in paths if not is_miss_image(path)]
-                matches = [row for row in bundle.rows if row.get("vasculumInputType") != "personal_photo" and catalog_number(row).casefold() == code.casefold()]
-                if len(matches) > 1:
-                    raise ValueError(f"Personal image group {directory / code} matches multiple catalog numbers. Link images explicitly using associatedMedia; no ambiguous attachment was made.")
-                if matches:
-                    attach(matches[0], normal_paths, source=source_name(input_dir, directory))
-                    if marked_paths:
-                        mark_misidentification(matches[0], marked_paths, input_dir)
-                    bundle.attached_personal_images += len(normal_paths)
-                else:
-                    namespace = source_name(input_dir, directory / code)
-                    identity = personal_occurrence_id(input_dir, namespace, "photo-only")
-                    if identity in identities:
-                        raise ValueError(f"Conflicting personal image identity: {namespace}")
-                    identities[identity] = namespace
-                    row = {"occurrenceID": identity, "catalogNumber": code, "basisOfRecord": "PreservedSpecimen",
-                        "vasculumInputType": "personal_photo", "vasculumInputSource": namespace,
-                        "_vasculumImageRoot": str(input_dir)}
-                    attach(row, normal_paths, source="")
-                    if marked_paths:
-                        mark_misidentification(row, marked_paths, input_dir)
-                    bundle.rows.append(row)
-                    bundle.photo_only_records += 1
-                claimed.update(paths)
-        if not import_unlinked_images and (input_dir / "images").is_dir():
-            unlinked = [path for path in (input_dir / "images").rglob("*") if path.is_file() and path.suffix.lower() in IMAGE_SUFFIXES and not is_miss_image(path) and path.resolve() not in claimed]
-            if unlinked:
-                bundle.warnings.append(f"{len(unlinked)} unlinked image(s) in collector images/ were not added as specimens. Put personal photographs in personal/images/, add a DwC row, or explicitly use --import-unlinked-images.")
+    if not import_unlinked_images and (input_dir / "images").is_dir():
+        unlinked = [path for path in (input_dir / "images").rglob("*") if path.is_file() and path.suffix.lower() in IMAGE_SUFFIXES and not is_miss_image(path) and path.resolve() not in claimed]
+        if unlinked:
+            bundle.warnings.append(f"{len(unlinked)} unlinked image(s) in collector images/ were not added as specimens. Put personal photographs in personal/images/, add a DwC row, or explicitly use --import-unlinked-images.")
     if not bundle.rows and bundle.dwc_path is None:
         raise FileNotFoundError(f"No DwC records or importable personal images were found in {input_dir}")
     for field in ["occurrenceID", "catalogNumber", "basisOfRecord", "associatedMedia", *SOURCE_FIELDS]:

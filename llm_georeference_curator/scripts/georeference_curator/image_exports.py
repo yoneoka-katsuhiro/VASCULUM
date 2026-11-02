@@ -44,8 +44,12 @@ def export_final_images(output_dir, source_dir, results, sidecars, cache_dir, *,
 
     # Never overwrite/delete an unknown or manually edited file in an existing output.
     image_dir = output_dir / "images"
+    if image_dir.is_symlink():
+        raise ValueError("Output images/ is a symbolic link; choose a fresh --output directory. Source images were not modified.")
     if image_dir.is_dir():
         for path in image_dir.rglob("*"):
+            if path.is_symlink():
+                raise ValueError(f"Symbolic link inside managed output images: {path}. Use a fresh --output directory.")
             if not path.is_file():
                 continue
             relative = str(path.relative_to(output_dir))

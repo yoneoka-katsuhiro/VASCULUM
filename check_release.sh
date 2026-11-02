@@ -50,15 +50,17 @@ echo "Compiling Python files..."
 echo "Running collector offline tests..."
 "${COLLECTOR_PYTHON}" "${COLLECTOR_DIR}/tests/test_offline.py"
 "${COLLECTOR_PYTHON}" "${COLLECTOR_DIR}/tests/test_manual_review.py"
+"${COLLECTOR_PYTHON}" "${COLLECTOR_DIR}/tests/test_coordinate_evidence.py"
 
 echo "Running georeference curator offline tests..."
 "${CURATOR_PYTHON}" "${CURATOR_DIR}/tests/test_offline.py"
 "${CURATOR_PYTHON}" "${CURATOR_DIR}/tests/test_token_efficiency.py"
 "${CURATOR_PYTHON}" "${CURATOR_DIR}/tests/test_habitat_review.py"
-"${CURATOR_PYTHON}" "${CURATOR_DIR}/tests/test_policy_evaluation.py"
+"${CURATOR_PYTHON}" "${CURATOR_DIR}/tests/test_policy.py"
+"${CURATOR_PYTHON}" "${CURATOR_DIR}/tests/test_photo_policy.py"
 "${CURATOR_PYTHON}" "${CURATOR_DIR}/tests/test_personal_inputs.py"
 "${CURATOR_PYTHON}" "${CURATOR_DIR}/tests/test_manual_review.py"
-"${CURATOR_PYTHON}" "${CURATOR_DIR}/scripts/benchmark_georeferences.py" --help >/dev/null
+"${CURATOR_PYTHON}" "${CURATOR_DIR}/tests/test_ribbon.py"
 
 echo "Checking CLI entry points..."
 bash "${COLLECTOR_DIR}/run_collect_specimens.sh" --help >/dev/null

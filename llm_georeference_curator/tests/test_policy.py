@@ -13,20 +13,21 @@ from unittest.mock import patch
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "scripts"))
 
-from test_offline import pipeline_options, write_rows, read_rows, trusted_row, select
+from test_offline import pipeline_options, write_rows, read_rows, trusted_row, select, write_label_photos
 from georeference_curator.checkpoints import RecordJournal
-from georeference_curator.evaluation import prepare, evaluate
-from georeference_curator.llm import LlmSettings, build_xie_prompt, parse_task_response, response_schema, CodexCliClient, apply_llm_label_fields, remaining_stage_time, is_model_selection_error
+from georeference_curator.llm import LlmSettings, CodexCliClient, apply_llm_label_fields, remaining_stage_time, is_model_selection_error
 from georeference_curator.models import LabelRead
 from georeference_curator.parallel import RateLimitBackoff
 from georeference_curator.pipeline import run_pipeline
 from georeference_curator.policy import to_wgs84, extent_uncertainty, rounding_radius
 from georeference_curator.progress import TerminalProgress
-from georeference_curator.scoring import SelectionOptions
+from georeference_curator.scoring import SelectionOptions, gazetteer_coordinate_candidates
+from georeference_curator.geocoding import GazetteerEntry, GazetteerMatch
+from georeference_curator.inputs import read_label_sidecar
 from georeference_curator.sources import SourceAuditor, public_url
 
 
-class PolicyEvaluationTests(unittest.TestCase):
+class PolicyTests(unittest.TestCase):
     def test_crs_conversion_and_unknown_datum(self):
         with self.assertRaises(ValueError):
             to_wgs84(23.5, 120.5, "")
@@ -52,24 +53,8 @@ class PolicyEvaluationTests(unittest.TestCase):
         self.assertGreater(extent_uncertainty(35.05, 138.05, geometry), 7000)
         self.assertIsNone(extent_uncertainty(36, 138.05, geometry))
         self.assertIsNone(extent_uncertainty(35, 138, dict(type="bbox", coordinates=[100, 138, 110, 139])))
+        self.assertIsNone(extent_uncertainty(35, 138, dict(type="LineString", coordinates=[[138, 35], [139, 36]])))
         self.assertEqual(rounding_radius("3.5123456e1", "1.38123456e2"), 1)
-
-    def test_baseline_contract_and_no_embedded_coordinates(self):
-        settings = LlmSettings(task_mode="xie_baseline", web_search_mode="disabled")
-        self.assertIsNone(response_schema(settings))
-        row = trusted_row(scientificName="SECRET TAXON", associatedMedia="SECRET IMAGE", habitat="SECRET HABITAT")
-        prompt = build_xie_prompt(row)
-        self.assertNotIn("35.123456", prompt)
-        self.assertNotIn("SECRET", prompt)
-        self.assertNotIn("GPS", prompt)
-        self.assertIn("Example input", prompt)
-        parsed = parse_task_response("[35.1,138.1]", settings)
-        self.assertEqual(parsed["coordinateCandidates"][0]["geodeticDatum"], "WGS84")
-        for invalid in ("[true, 0]", "[100, 0]", "[35]", "{}"):
-            with self.assertRaises(ValueError):
-                parse_task_response(invalid, settings)
-        with self.assertRaises(ValueError):
-            build_xie_prompt(dict(locality="WGS84 N 35.1234 E 138.1234"))
 
     def test_source_snapshot_is_not_fact_verification(self):
         class Response:
@@ -97,6 +82,52 @@ class PolicyEvaluationTests(unittest.TestCase):
             public_url("file:///etc/passwd")
         with self.assertRaises(ValueError):
             public_url("http://127.0.0.1/")
+
+    def test_gazetteer_extent_does_not_replace_total_uncertainty(self):
+        entry = GazetteerEntry("Example", "35.05", "138.05", geodetic_datum="WGS84",
+            uncertainty_meters="20000", verified=True, bounds="[35, 138, 35.1, 138.1]")
+        candidate = gazetteer_coordinate_candidates([GazetteerMatch(entry, 1, "verified survey")], LabelRead())[0]
+        self.assertEqual(float(candidate.candidate_uncertainty_meters), 20000)
+        entry.uncertainty_meters = ""
+        candidate = gazetteer_coordinate_candidates([GazetteerMatch(entry, 1, "verified survey")], LabelRead())[0]
+        self.assertNotEqual(candidate.uncertainty_basis, "verified_reference_extent")
+        entry.uncertainty_meters, entry.bounds = "20000", "[36, 138, 37, 139]"
+        candidate = gazetteer_coordinate_candidates([GazetteerMatch(entry, 1, "verified survey")], LabelRead())[0]
+        self.assertNotEqual(candidate.uncertainty_basis, "verified_reference_extent")
+
+    def test_conflicting_labels_never_start_coordinate_research(self):
+        class Client:
+            def create_json(self, *_args, **_kwargs):
+                return dict(status="conflict", labelTranscription="Two different collecting events",
+                            localityText="Mt Example trail", detectedLanguages=["en"],
+                            elevationText="", collectorText="", eventDateText="", remarks="different labels")
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            photo = root / "input" / "images" / "A.jpg"
+            photo.parent.mkdir(parents=True)
+            photo.write_bytes(b"whole specimen photograph")
+            write_rows(root / "input" / "dwc.tsv", [dict(catalogNumber="A", associatedMedia="images/A.jpg")])
+            with patch("georeference_curator.pipeline.make_client", return_value=Client()), patch("georeference_curator.pipeline.preflight_llm"):
+                report = run_pipeline(**pipeline_options(root, llm_mode="on"))
+            self.assertEqual(report.review, 1)
+            self.assertEqual(report.records_written, 0)
+            self.assertEqual(report.llm_georeference_requests, 0)
+
+    def test_ambiguous_manual_label_keys_stop_before_LLM_work(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            labels = root / "labels.tsv"
+            write_rows(labels, [dict(catalogNumber="A", labelTranscription="first"),
+                                dict(catalogNumber="A", labelTranscription="second")])
+            with self.assertRaisesRegex(ValueError, "Duplicate label sidecar"):
+                read_label_sidecar(labels)
+            write_rows(labels, [dict(catalogNumber="A", labelTranscription="only")])
+            write_rows(root / "input" / "dwc.tsv", [dict(catalogNumber="A", occurrenceID="one"),
+                                                    dict(catalogNumber="A", occurrenceID="two")])
+            with patch("georeference_curator.pipeline.preflight_llm") as preflight:
+                with self.assertRaisesRegex(ValueError, "matches multiple input records"):
+                    run_pipeline(**pipeline_options(root, label_tsv=labels))
+            preflight.assert_not_called()
 
     def test_parallel_progress_propagates_exceptions(self):
         progress = TerminalProgress(True)
@@ -140,28 +171,6 @@ class PolicyEvaluationTests(unittest.TestCase):
         result = select(row={"country": "Japan"}, label=label, insufficient="country_only")
         self.assertNotEqual(result.curation_status, "excluded")
 
-    def test_baseline_pipeline_ignores_images_originals_and_web(self):
-        class Client:
-            def __init__(self, settings): self.settings = settings
-            def create_json(inner, prompt, image_paths=None):
-                self.assertEqual(inner.settings.task_mode, "xie_baseline")
-                self.assertEqual(inner.settings.web_search_mode, "disabled")
-                self.assertEqual(image_paths, [])
-                self.assertNotIn("35.123456", prompt)
-                return parse_task_response("[35.2,138.2]", inner.settings)
-        with tempfile.TemporaryDirectory() as directory:
-            root = Path(directory)
-            write_rows(root / "input" / "dwc.tsv", [trusted_row(associatedMedia="images/private.jpg")])
-            with patch("georeference_curator.llm.command_available", return_value=True), patch("georeference_curator.pipeline.make_client", side_effect=Client) as factory, patch("georeference_curator.pipeline.preflight_llm"):
-                report = run_pipeline(**pipeline_options(root, llm_mode="on", georeference_method="xie-baseline", taxon_habitat="forest", use_dem=True))
-            self.assertEqual(factory.call_count, 1)
-            self.assertEqual(report.llm_transcription_requests, 0)
-            self.assertEqual(report.llm_georeference_requests, 1)
-            self.assertEqual(report.image_records, 0)
-            self.assertEqual(report.geospatial_refinement_attempted, 0)
-            self.assertEqual(report.habitat_checks_attempted, 0)
-            self.assertEqual(read_rows(root / "out" / "georeference_candidates.tsv")[0]["candidateLatitude"], "35.200000")
-
     def test_image_change_invalidates_completed_record(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
@@ -185,7 +194,8 @@ class PolicyEvaluationTests(unittest.TestCase):
             root = Path(directory)
             write_rows(root / "input" / "dwc.tsv", [dict(catalogNumber="A", country="Japan", locality="Mt Example trail")])
             client = Client()
-            args = pipeline_options(root, llm_mode="on")
+            labels = write_label_photos(root, [dict(catalogNumber="A", labelTranscription="Mt Example trail", localityText="Mt Example trail")])
+            args = pipeline_options(root, llm_mode="on", label_tsv=labels)
             with patch("georeference_curator.llm.command_available", return_value=True), patch("georeference_curator.pipeline.make_client", return_value=client), patch("georeference_curator.pipeline.preflight_llm"):
                 first = run_pipeline(**args)
                 second = run_pipeline(**args)
@@ -195,37 +205,16 @@ class PolicyEvaluationTests(unittest.TestCase):
             self.assertEqual(second.resumed_records, 1)
 
     def test_preserve_trusted_original_beyond_six_decimals(self):
-        row = trusted_row(decimalLatitude="35.123456789", decimalLongitude="138.123456789")
+        row = trusted_row(decimalLatitude="35.123456789", decimalLongitude="138.123456789",
+                          georeferencedBy="Field collector", georeferencedDate="2000-01-01",
+                          georeferenceRemarks="Original GPS survey", georeferenceSources="Original field notebook")
         result = select(row=row)
         self.assertEqual(result.row["decimalLatitude"], row["decimalLatitude"])
         self.assertIn("GPS", result.row["georeferenceProtocol"])
-
-    def test_prepare_masks_truth_and_groups_shared_sites(self):
-        with tempfile.TemporaryDirectory() as directory:
-            root = Path(directory)
-            records = [trusted_row(occurrenceID="a", catalogNumber="A", locality="Shared site"), trusted_row(occurrenceID="b", catalogNumber="B", locality="Shared site"), trusted_row(occurrenceID="c", catalogNumber="C", locality="WGS84 N 35.1234 E 138.1234")]
-            write_rows(root / "input.tsv", records)
-            manifest = prepare(root / "input.tsv", root / "benchmark")
-            self.assertEqual(manifest["retained"], 2)
-            self.assertEqual(manifest["excluded"], 1)
-            truth = read_rows(root / "benchmark" / "ground_truth.tsv")
-            self.assertEqual(truth[0]["split"], truth[1]["split"])
-            self.assertEqual(truth[0]["group"], truth[1]["group"])
-            masked = read_rows(root / "benchmark" / truth[0]["split"] / "dwc.tsv")
-            self.assertEqual(set(masked[0]), {"occurrenceID", "catalogNumber", "country", "stateProvince", "county", "locality"})
-            self.assertNotIn("35.123456", json.dumps(masked))
-
-    def test_evaluation_retains_failures_and_outliers(self):
-        with tempfile.TemporaryDirectory() as directory:
-            root = Path(directory)
-            write_rows(root / "truth.tsv", [dict(recordID=str(index), catalogNumber=str(index), split="evaluation", group=str(index), latitude="35", longitude="138") for index in range(3)])
-            write_rows(root / "candidates.tsv", [dict(occurrenceID="0", catalogNumber="0", selected="true", candidateLatitude="35", candidateLongitude="138", candidateGeodeticDatum="WGS84", candidateUncertaintyMeters="30", uncertaintyBasis="documented_label"), dict(occurrenceID="1", catalogNumber="1", selected="true", candidateLatitude="0", candidateLongitude="0", candidateGeodeticDatum="WGS84", candidateUncertaintyMeters="100", uncertaintyBasis="llm_reported_only")])
-            result = evaluate(root / "truth.tsv", {"enhanced": root / "candidates.tsv"})["methods"]["enhanced"]
-            self.assertAlmostEqual(result["failureRate"], 1 / 3)
-            self.assertGreater(result["maxKm"], 100)
-            self.assertEqual(result["defensibleUncertaintyCount"], 1)
-            self.assertEqual(result["uncertaintyCoverage"], 1)
-            self.assertAlmostEqual(result["withinKmFractionAllReferences"]["10"], 1 / 3)
+        self.assertEqual(result.row["georeferencedBy"], "Field collector")
+        self.assertEqual(result.row["georeferencedDate"], "2000-01-01")
+        self.assertIn("Original GPS survey", result.row["georeferenceRemarks"])
+        self.assertEqual(result.row["georeferenceSources"], "Original field notebook")
 
     def test_retryable_failure_is_not_insufficient_locality(self):
         class Client:
@@ -234,7 +223,8 @@ class PolicyEvaluationTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             write_rows(root / "input" / "dwc.tsv", [dict(catalogNumber="A", country="Japan", locality="Mt Example trail")])
-            args = pipeline_options(root, llm_mode="on", llm_command="/bin/true")
+            labels = write_label_photos(root, [dict(catalogNumber="A", labelTranscription="Mt Example trail", localityText="Mt Example trail")])
+            args = pipeline_options(root, llm_mode="on", llm_command="/bin/true", label_tsv=labels)
             with patch("georeference_curator.llm.command_available", return_value=True), patch("georeference_curator.pipeline.make_client", return_value=Client()), patch("georeference_curator.pipeline.preflight_llm"):
                 first = run_pipeline(**args)
                 second = run_pipeline(**args)
@@ -244,6 +234,9 @@ class PolicyEvaluationTests(unittest.TestCase):
             log = json.loads((root / "out" / "georeference.log.jsonl").read_text())
             self.assertEqual(log["curationStatus"], "failed")
             self.assertEqual(log["stageErrors"][0]["stage"], "coordinate_research")
+            self.assertEqual(first.records_written, 0)
+            self.assertEqual(second.records_written, 0)
+            self.assertFalse(log["includeInDwc"])
 
     def test_early_label_coordinate_avoids_research(self):
         class Client:
@@ -254,9 +247,10 @@ class PolicyEvaluationTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             write_rows(root / "input" / "dwc.tsv", [dict(catalogNumber="LABEL", country="Japan", locality="Mt Example trail", verbatimCoordinates="WGS84 N 35.123456 E 138.123456")])
+            labels = write_label_photos(root, [dict(catalogNumber="LABEL", labelTranscription="WGS84 N 35.123456 E 138.123456", localityText="Mt Example trail")])
             client = Client()
             with patch("georeference_curator.llm.command_available", return_value=True), patch("georeference_curator.pipeline.make_client", return_value=client), patch("georeference_curator.pipeline.preflight_llm"):
-                report = run_pipeline(**pipeline_options(root, llm_mode="on", llm_command="/bin/true", curation_mode="robust", label_coordinate_uncertainty_meters=30))
+                report = run_pipeline(**pipeline_options(root, llm_mode="on", llm_command="/bin/true", label_tsv=labels, label_coordinate_uncertainty_meters=30))
             self.assertEqual(client.calls, 0)
             self.assertEqual(report.accepted, 1)
             self.assertEqual(report.llm_skipped_precise_label, 1)

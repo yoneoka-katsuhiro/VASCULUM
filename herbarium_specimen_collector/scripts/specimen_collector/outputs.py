@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import csv
+import hashlib
+import json
 from collections import Counter
 from dataclasses import dataclass, field
 from datetime import datetime
@@ -61,7 +63,10 @@ def dwc_row(record: SpecimenRecord, accepted_name: str) -> dict[str, str]:
         "collectionCode": record.collection_code,
         "catalogNumber": code,
         "otherCatalogNumbers": original_catalog if original_catalog and original_catalog != code else "",
-        "datasetName": record.merged_from_sources or record.source,
+        "datasetID": record.dataset_id,
+        "datasetName": record.dataset_name,
+        "vasculumPrimarySource": record.source,
+        "vasculumSources": record.merged_from_sources or record.source,
         "scientificName": record.scientific_name,
         "acceptedNameUsage": accepted_name,
         "recordedBy": record.recorded_by,
@@ -74,13 +79,28 @@ def dwc_row(record: SpecimenRecord, accepted_name: str) -> dict[str, str]:
         "verbatimLocality": record.verbatim_locality,
         "decimalLatitude": record.decimal_latitude,
         "decimalLongitude": record.decimal_longitude,
+        "vasculumCoordinateSource": record.coordinate_source or record.source_record_url or record.source,
+        "geodeticDatum": record.geodetic_datum,
+        "coordinateUncertaintyInMeters": record.coordinate_uncertainty_meters,
+        "coordinatePrecision": record.coordinate_precision,
+        "georeferenceProtocol": record.georeference_protocol,
+        "georeferenceSources": record.georeference_sources,
+        "georeferenceVerificationStatus": record.georeference_verification_status,
+        "georeferenceRemarks": record.georeference_remarks,
+        "georeferencedBy": record.georeferenced_by,
+        "georeferencedDate": record.georeferenced_date,
+        "geospatialIssues": record.geospatial_issues or ("source_reported_geospatial_issue" if "issue" in record.coordinate_status else ""),
         "verbatimElevation": record.elevation,
+        "minimumElevationInMeters": record.minimum_elevation_meters,
+        "maximumElevationInMeters": record.maximum_elevation_meters,
         "identifiedBy": record.identified_by,
         "typeStatus": record.type_status,
         "associatedMedia": " | ".join(media),
         "references": record.source_record_url,
-        "license": record.image_license,
-        "rightsHolder": record.rights_holder,
+        "license": record.data_license,
+        "rightsHolder": record.data_rights_holder,
+        "vasculumImageLicense": record.image_license,
+        "vasculumImageRightsHolder": record.rights_holder,
     }
 
 
@@ -178,4 +198,17 @@ def write_summary(path: Path, report: RunReport) -> None:
 
     lines.extend(["", f"Errors: {len(report.errors)}"])
     lines.extend(f"- {error}" for error in report.errors)
+    dwc_path = report.output_dir / "dwc.tsv"
+    if dwc_path.is_file():
+        group = lambda source: source.upper() if source.lower() in {"gbif", "cvh"} else "Other"
+        retrieved = Counter()
+        for source in report.sources.values():
+            retrieved[group(source.source)] += source.records
+        unique = Counter(group(record.source) for record in report.records)
+        excluded = Counter(group(record.source) for record in manually_excluded)
+        provenance = {
+            "version": 1, "dwcSha256": hashlib.sha256(dwc_path.read_bytes()).hexdigest(),
+            "retrieved": dict(retrieved), "unique": dict(unique), "excluded": dict(excluded),
+        }
+        lines.extend(("", "Flow provenance: " + json.dumps(provenance, sort_keys=True)))
     path.write_text("\n".join(lines) + "\n", encoding="utf-8")

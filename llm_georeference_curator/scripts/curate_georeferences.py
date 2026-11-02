@@ -15,7 +15,9 @@ def parse_args():
     parser = argparse.ArgumentParser(
         description=(
             "VASCULUM llm_georeference_curator: LLM-assisted georeferencing "
-            "for herbarium_specimen_collector DwC outputs."
+            "for herbarium_specimen_collector DwC outputs. "
+            "Keep documented coordinates or georeference readable specimen photos. "
+            "Final DwC includes accepted records only; every record remains in audit outputs."
         )
     )
     parser.add_argument("--input", required=True, type=Path, help="Collector output directory containing dwc.tsv/dwc.csv and images/.")
@@ -30,29 +32,10 @@ def parse_args():
     parser.add_argument("--dry-run", action="store_true", help="Validate input files and options without writing output.")
     parser.add_argument("--limit", type=int, default=0, help="Process only the first N records. Useful for LLM smoke tests.")
 
-    parser.add_argument(
-        "--curation-mode",
-        choices=("standard", "robust"),
-        default="standard",
-        help=(
-            "standard includes review/unresolved records with explicit status. "
-            "robust exports accepted records only; all records remain in the audit outputs."
-        ),
-    )
-    parser.add_argument("--standard", dest="curation_mode", action="store_const", const="standard", help="Alias for --curation-mode standard.")
-    parser.add_argument("--robust", dest="curation_mode", action="store_const", const="robust", help="Alias for --curation-mode robust.")
-    parser.add_argument("--original-precision-decimals", type=int, default=4, help="Deprecated compatibility option; decimal places never establish coordinate trust.")
-    parser.add_argument("--georeference-method", choices=("evidence-assisted", "xie-baseline"), help="Explicit method; xie-baseline is text-only, one-shot and has no web/image/terrain inference.")
     parser.add_argument("--max-uncertainty-meters", type=float, help="Optional study-specific maximum accepted horizontal uncertainty, not an accuracy guarantee.")
     parser.add_argument("--label-coordinate-uncertainty-meters", type=float, help="Explicit measurement allowance added to label rounding uncertainty; document the justification for this policy.")
     parser.add_argument("--reference-regions-tsv", type=Path, help="Optional country/state bounding regions with source provenance for consistency checks.")
     parser.add_argument("--review-distance-km", type=float, default=5.0, help="Distance at which precise original and candidate coordinates conflict.")
-    parser.add_argument(
-        "--exclude-insufficient-locality",
-        action=argparse.BooleanOptionalAction,
-        default=True,
-        help="Exclude records when locality is only country/state/province level and no image/candidate is available.",
-    )
 
     parser.add_argument("--llm-mode", choices=("auto", "on", "off"), default="auto", help="auto uses an available provider, on requires it, off disables LLM use.")
     parser.add_argument(
@@ -77,24 +60,21 @@ def parse_args():
     parser.add_argument("--llm-command", default="", help="Command for opus/fable/custom providers. Placeholders: {model}, {prompt_file}, {image_paths}.")
     parser.add_argument("--llm-api-key-env", default="OPENAI_API_KEY", help="Environment variable containing the OpenAI API key.")
     parser.add_argument(
-        "--llm-timeout-seconds",
-        type=int,
-        default=600,
-        help="Legacy fallback timeout for stages without an explicit stage timeout.",
-    )
-    parser.add_argument(
         "--label-timeout-seconds",
         type=int,
+        default=600,
         help="Whole-image label-reading stage timeout. Default: 600.",
     )
     parser.add_argument(
         "--georeference-timeout-seconds",
         type=int,
+        default=600,
         help="LLM coordinate-research stage timeout. Default: 600.",
     )
     parser.add_argument(
         "--verification-timeout-seconds",
         type=int,
+        default=600,
         help="Terrain, habitat, route, and DEM verification stage timeout. Default: 600.",
     )
     parser.add_argument(
@@ -132,7 +112,6 @@ def parse_args():
     parser.add_argument("--max-llm-calls", type=int, default=0, help="Hard run-wide fresh LLM attempt limit, including retries. 0 means no extra limit; not a token cap.")
 
     parser.add_argument("--georeferenced-by", default="VASCULUM llm_georeference_curator", help="Value written to DwC georeferencedBy.")
-    parser.add_argument("--prompt-profile", choices=("vasculum-default", "xie", "xie-modified"), default="xie-modified", help="Prompt/protocol profile recorded in georeferenceProtocol.")
     parser.add_argument("--use-trails", action=argparse.BooleanOptionalAction, default=True, help="Use roads and trails as georeferencing evidence.")
     parser.add_argument("--use-hydrology", action=argparse.BooleanOptionalAction, default=True, help="Use rivers, streams, valleys, and hydrology as evidence.")
     parser.add_argument("--use-dem", action=argparse.BooleanOptionalAction, default=True, help="Use elevation and terrain as georeferencing evidence.")
@@ -155,28 +134,14 @@ def parse_args():
             "--habitat 'subalpine forest' --habitat river."
         ),
     )
-    parser.add_argument(
-        "--taxon-habitat",
-        default="",
-        help="Legacy free-text habitat option; combined with --habitat.",
-    )
-    parser.add_argument("--debug-log", action=argparse.BooleanOptionalAction, default=True, help="Write georeference.log.jsonl.")
     return parser.parse_args()
 
 
 def main() -> int:
     args = parse_args()
     habitat_inputs = list(args.habitat)
-    if args.taxon_habitat.strip():
-        habitat_inputs.append(args.taxon_habitat.strip())
-    if args.original_precision_decimals < 0:
-        print("ERROR: --original-precision-decimals must be non-negative.", file=sys.stderr)
-        return 2
     if args.review_distance_km <= 0:
         print("ERROR: --review-distance-km must be greater than 0.", file=sys.stderr)
-        return 2
-    if args.llm_timeout_seconds <= 0:
-        print("ERROR: --llm-timeout-seconds must be greater than 0.", file=sys.stderr)
         return 2
     for option, value in (
         ("--label-timeout-seconds", args.label_timeout_seconds),
@@ -202,10 +167,7 @@ def main() -> int:
             label_tsv=args.label_tsv,
             gazetteer_tsv=args.gazetteer_tsv,
             dry_run=args.dry_run,
-            curation_mode=args.curation_mode,
-            original_precision_decimals=args.original_precision_decimals,
             review_distance_km=args.review_distance_km,
-            exclude_insufficient_locality=args.exclude_insufficient_locality,
             llm_mode=args.llm_mode,
             llm_provider=args.llm_provider,
             llm_model=args.llm_model,
@@ -213,18 +175,15 @@ def main() -> int:
             llm_web_search=args.llm_web_search,
             llm_command=args.llm_command,
             llm_api_key_env=args.llm_api_key_env,
-            llm_timeout_seconds=args.llm_timeout_seconds,
             llm_rate_limit_retries=args.llm_rate_limit_retries,
             confirm_llm=not args.yes,
             georeferenced_by=args.georeferenced_by,
-            prompt_profile=args.prompt_profile,
             use_trails=args.use_trails,
             use_hydrology=args.use_hydrology,
             use_dem=args.use_dem,
             geospatial_refinement=args.geospatial_refinement,
             use_vegetation_prior=args.use_vegetation_prior,
             taxon_habitat=" | ".join(habitat_inputs),
-            debug_log=args.debug_log,
             limit=args.limit,
             workers=args.workers,
             llm_cache_enabled=args.llm_cache,
@@ -234,7 +193,6 @@ def main() -> int:
             verification_timeout_seconds=args.verification_timeout_seconds,
             label_model=args.label_model,
             label_reasoning_effort=args.label_reasoning_effort,
-            georeference_method=args.georeference_method,
             max_uncertainty_meters=args.max_uncertainty_meters,
             label_coordinate_uncertainty_meters=args.label_coordinate_uncertainty_meters,
             reference_regions_tsv=args.reference_regions_tsv,
@@ -267,12 +225,13 @@ def main() -> int:
     print(f"Modified DwC TSV: {report.output_dir / 'modified_dwc.tsv'}")
     print(f"Candidates TSV: {report.output_dir / 'georeference_candidates.tsv'}")
     print(f"Summary: {report.output_dir / 'summary.txt'}")
+    if report.ribbon_path:
+        print(f"Ribbon PDF: {report.ribbon_path}")
     if report.images_exported:
         print(f"Final images: {report.output_dir / 'images'} ({report.images_exported})")
     elif args.export_images:
         print("Final images: none (no included local images)")
-    if args.debug_log:
-        print(f"Log: {report.output_dir / 'georeference.log.jsonl'}")
+    print(f"Log: {report.output_dir / 'georeference.log.jsonl'}")
     if report.partial_failure:
         print(f"Completed with {len(report.errors)} error(s); see summary.txt.", file=sys.stderr)
         return 3

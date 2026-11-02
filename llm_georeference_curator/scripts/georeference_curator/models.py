@@ -172,7 +172,7 @@ class CuratedResult:
     verification_status: str
     selected_candidate: Optional[CoordinateCandidate] = None
     notes: List[str] = field(default_factory=list)
-    include_in_dwc: bool = True
+    include_in_dwc: bool = False
     exclusion_reason: str = ""
     llm_usage: List[dict] = field(default_factory=list)
     habitat_review: dict = field(default_factory=dict)
@@ -190,7 +190,6 @@ class RunReport:
     output_dir: Path
     started_at: datetime
     finished_at: Optional[datetime] = None
-    curation_mode: str = "standard"
     llm_provider: str = ""
     llm_model: str = ""
     llm_reasoning_effort: str = ""
@@ -224,6 +223,7 @@ class RunReport:
     excluded: int = 0
     excluded_insufficient_locality: int = 0
     excluded_manual_misidentification: int = 0
+    excluded_missing_source_image: int = 0
     candidate_rows: int = 0
     label_sidecar_rows: int = 0
     gazetteer_rows: int = 0
@@ -243,7 +243,6 @@ class RunReport:
     habitat_review_unavailable: int = 0
     geospatial_refinement_warnings: List[str] = field(default_factory=list)
     errors: List[str] = field(default_factory=list)
-    georeference_method: str = "evidence-assisted"
     max_uncertainty_meters: Optional[float] = None
     accepted: int = 0
     review: int = 0
@@ -257,6 +256,8 @@ class RunReport:
     input_files: List[dict] = field(default_factory=list)
     input_warnings: List[str] = field(default_factory=list)
     images_exported: int = 0
+    ribbon_path: str = ""
+    ribbon_counts: List[dict] = field(default_factory=list)
 
     @property
     def partial_failure(self) -> bool:

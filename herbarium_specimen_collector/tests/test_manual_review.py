@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import csv
+import hashlib
+import json
 import sys
 import tempfile
 import unittest
@@ -14,10 +16,36 @@ sys.path.insert(0, str(ROOT / "scripts"))
 from specimen_collector.images import download_images, prune_unreferenced_images
 from specimen_collector.models import SpecimenRecord
 from specimen_collector.outputs import RunReport, SourceReport, write_dwc_exports, write_summary
-from specimen_collector.records import image_basename
+from specimen_collector.records import deduplicate, image_basename
 
 
 class CollectorManualReviewTests(unittest.TestCase):
+    def test_flow_provenance_keeps_primary_source_and_collector_exclusions(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            records = deduplicate([
+                SpecimenRecord(source="gbif", institution_code="P", catalog_number="A"),
+                SpecimenRecord(source="cvh", institution_code="P", catalog_number="A"),
+                SpecimenRecord(source="cvh", institution_code="P", catalog_number="B"),
+            ])
+            records[1].download_status = "excluded_manual_misidentification"
+            write_dwc_exports(root, records, "Example species")
+            with (root / "dwc.tsv").open() as handle:
+                row = next(csv.DictReader(handle, delimiter="\t"))
+            self.assertEqual(row["vasculumPrimarySource"], "gbif")
+            self.assertEqual(row["vasculumSources"], "gbif; cvh")
+            report = RunReport(version="test", accepted_name="Example species", search_names=[],
+                image_resolution="standard", output_dir=root, started_at=datetime.now(timezone.utc),
+                records=records, records_found=3,
+                sources={"gbif": SourceReport("gbif", records=1), "cvh": SourceReport("cvh", records=2)})
+            write_summary(root / "summary.txt", report)
+            line = next(line for line in (root / "summary.txt").read_text().splitlines() if line.startswith("Flow provenance: "))
+            data = json.loads(line[len("Flow provenance: "):])
+            self.assertEqual(data["retrieved"], {"GBIF": 1, "CVH": 2})
+            self.assertEqual(data["unique"], {"GBIF": 1, "CVH": 1})
+            self.assertEqual(data["excluded"], {"CVH": 1})
+            self.assertEqual(data["dwcSha256"], hashlib.sha256((root / "dwc.tsv").read_bytes()).hexdigest())
+
     def test_collector_does_not_redownload_a_marked_specimen(self):
         for skip_images in (False, True):
             with self.subTest(skip_images=skip_images), tempfile.TemporaryDirectory() as directory:

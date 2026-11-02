@@ -23,16 +23,11 @@ def normalize(text: str) -> str:
 
 
 def useful_locality_text(row, label) -> str:
-    label_text = "" if label.label_source == "dwc_text" else label.label_transcription
+    label_text = label.label_transcription
     return " ".join(
         part
         for part in [
-            row.get("verbatimLocality", ""),
-            row.get("locality", ""),
-            row.get("county", ""),
-            row.get("municipality", ""),
-            label.locality_text,
-            label_text,
+            label.locality_text or label_text,
         ]
         if part
     )

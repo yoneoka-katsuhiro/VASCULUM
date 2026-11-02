@@ -1,18 +1,11 @@
 # Herbarium Specimen Collector
 
-**Find, reconcile, and download herbarium specimens by scientific name.**
+Herbarium Specimen Collector searches public specimen databases by scientific
+name, merges duplicate portal records that represent the same physical
+specimen, and downloads linked specimen images at a practical research
+resolution.
 
-Herbarium Specimen Collector searches multiple public specimen portals, merges
-duplicate records that refer to the same physical voucher, and downloads linked
-herbarium images at a practical research resolution. It produces a compact,
-Darwin Core-oriented dataset that can be reviewed directly or passed to the
-VASCULUM georeference curator.
-
-Version: `v0.1.14`
-
-| Input | Main output | Best suited for |
-| --- | --- | --- |
-| Accepted scientific name and optional synonyms | `dwc.csv`, `dwc.tsv`, specimen images and `summary.txt` | Taxonomic revisions, specimen audits, digitization projects and downstream georeferencing |
+Version: `v0.1.15`
 
 ## Human Review With `miss_`
 
@@ -134,7 +127,7 @@ Use `--output PATH` to choose another output directory.
 ## Reusing Outputs From Earlier Releases
 
 Collector outputs created with recent releases, including v0.1.7 and v0.1.8,
-can be reused with v0.1.14. A reusable taxon directory should contain the DwC
+can be reused with v0.1.15. A reusable taxon directory should contain the DwC
 table and its image folder:
 
 ```text
@@ -190,7 +183,6 @@ cd VASCULUM
 
 bash llm_georeference_curator/run_llm_georeference_curator.sh \
   --input herbarium_specimen_collector/output/Haplopteris_mediosora \
-  --robust \
   --habitat "subalpine forest" \
   --llm-mode on
 ```
@@ -267,9 +259,20 @@ the current terminal width.
 ## Research And Licensing
 
 Metadata and images remain subject to the licenses and terms supplied by their
-source institutions. Review `license`, `rightsHolder`, `references`, and
+source institutions. `license` and `rightsHolder` describe occurrence data;
+`vasculumImageLicense` and `vasculumImageRightsHolder` describe the linked image.
+Missing rights are not inferred. Review those fields, `references`, and
 `associatedMedia` before publication or redistribution. Cite the underlying
 datasets and herbaria, not only this software. See `../CITATIONS.md`.
+
+Supplied dataset identifiers/names and coordinate datum, uncertainty,
+georeferencing provenance and geographic issue flags are preserved by DwC-based
+adapters when available. Duplicate merging keeps each coordinate pair with its
+own evidence from one source record; missing values are not assembled into a
+hybrid trusted point. `vasculumCoordinateSource` identifies that coordinate donor.
+Portal provenance is in `vasculumPrimarySource` and `vasculumSources`, separate
+from underlying dataset metadata. No georeference accuracy is inferred from the
+number of decimal places or the absence of portal issue flags.
 
 The program deliberately uses request delays, bounded retries, and a contact
 email. Do not use it to bypass login, CAPTCHA, access controls, or institutional
@@ -277,3 +280,7 @@ terms.
 
 The source code is released under the MIT License. Downloaded data and images
 are not covered by the software license.
+
+The georeference curator retains documented existing coordinates. Otherwise,
+new estimates require a local photograph and readable collecting-label evidence;
+DwC locality text alone is not a fallback.

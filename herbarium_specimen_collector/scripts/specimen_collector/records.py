@@ -127,6 +127,17 @@ def collection_event_key(record: SpecimenRecord) -> str:
 def merge_record_group(key: str, records: list[SpecimenRecord]) -> SpecimenRecord:
     ordered = sorted(records, key=record_priority, reverse=True)
     merged = SpecimenRecord(**ordered[0].as_row())
+    coordinate_fields = {
+        "decimal_latitude", "decimal_longitude", "coordinate_source", "geodetic_datum",
+        "coordinate_uncertainty_meters", "coordinate_precision", "coordinate_status",
+        "georeference_protocol", "georeference_sources", "georeference_verification_status",
+        "georeference_remarks", "georeferenced_by", "georeferenced_date", "geospatial_issues",
+    }
+    image_fields = {
+        "image_url", "original_image_url", "image_license", "rights_holder",
+        "download_url", "local_image_path", "image_sha256", "download_status",
+    }
+    elevation_fields = {"elevation", "minimum_elevation_meters", "maximum_elevation_meters"}
     excluded = {
         "source",
         "source_record_id",
@@ -136,15 +147,24 @@ def merge_record_group(key: str, records: list[SpecimenRecord]) -> SpecimenRecor
         "image_sha256",
         "download_status",
         "notes",
-    }
+        "dataset_id", "dataset_name", "data_license", "data_rights_holder",
+    } | coordinate_fields | image_fields | elevation_fields
     for candidate in ordered[1:]:
         for field in SpecimenRecord.fieldnames():
             if field not in excluded and not getattr(merged, field) and getattr(candidate, field):
                 setattr(merged, field, getattr(candidate, field))
-        if not merged.image_url and candidate.image_url:
-            merged.image_url = candidate.image_url
-            merged.original_image_url = candidate.original_image_url or candidate.image_url
-            merged.download_status = candidate.download_status
+
+    # Coordinates and their error/datum provenance must come from the same record.
+    coordinate_record = next((item for item in ordered if item.decimal_latitude and item.decimal_longitude), ordered[0])
+    for field in coordinate_fields:
+        setattr(merged, field, getattr(coordinate_record, field))
+    merged.coordinate_source = coordinate_record.coordinate_source or coordinate_record.source_record_url or coordinate_record.source_record_id or coordinate_record.source
+    image_record = next((item for item in ordered if item.image_url), ordered[0])
+    for field in image_fields:
+        setattr(merged, field, getattr(image_record, field))
+    elevation_record = next((item for item in ordered if item.elevation or item.minimum_elevation_meters or item.maximum_elevation_meters), ordered[0])
+    for field in elevation_fields:
+        setattr(merged, field, getattr(elevation_record, field))
 
     merged.physical_specimen_key = key
     merged.collection_event_key = collection_event_key(merged)

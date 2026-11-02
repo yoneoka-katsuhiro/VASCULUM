@@ -32,6 +32,35 @@ def value_to_str(value: object) -> str:
     return str(value)
 
 
+def dwc_metadata(row: dict) -> dict[str, str]:
+    """Preserve supplied DwC evidence, without inferring missing accuracy or rights."""
+    terms = {
+        "dataset_id": "datasetID", "dataset_name": "datasetName",
+        "data_license": "license", "data_rights_holder": "rightsHolder",
+        "geodetic_datum": "geodeticDatum",
+        "coordinate_uncertainty_meters": "coordinateUncertaintyInMeters",
+        "coordinate_precision": "coordinatePrecision",
+        "georeference_protocol": "georeferenceProtocol",
+        "georeference_sources": "georeferenceSources",
+        "georeference_verification_status": "georeferenceVerificationStatus",
+        "georeference_remarks": "georeferenceRemarks",
+        "georeferenced_by": "georeferencedBy", "georeferenced_date": "georeferencedDate",
+        "minimum_elevation_meters": "minimumElevationInMeters",
+        "maximum_elevation_meters": "maximumElevationInMeters",
+    }
+    result = {field: dwca_row_value(row, term) for field, term in terms.items()}
+    result["dataset_id"] = result["dataset_id"] or value_to_str(row.get("datasetKey"))
+    issues = row.get("issues") or row.get("issue") or []
+    if isinstance(issues, str):
+        issues = re.split(r"[;|,]", issues)
+    geographic = [str(issue) for issue in issues if re.search(r"COORDINATE|GEODETIC|GEOSPATIAL", str(issue), re.I)]
+    geographic.extend(filter(None, (dwca_row_value(row, "geospatialIssues"), dwca_row_value(row, "coordinateIssues"))))
+    if row.get("hasGeospatialIssue") is True or str(row.get("geospatialKosher", "")).lower() == "false":
+        geographic.append("source_reported_geospatial_issue")
+    result["geospatial_issues"] = "; ".join(dict.fromkeys(geographic))
+    return result
+
+
 def image_like_url(url: str) -> bool:
     lower = url.lower()
     return bool(
@@ -189,6 +218,7 @@ def gbif_records(
                 records.append(
                     SpecimenRecord(
                         source=source_name,
+                        **dwc_metadata(item),
                         query_name=query_name,
                         source_record_id=gbif_key,
                         source_record_url=value_to_str(
@@ -217,7 +247,7 @@ def gbif_records(
                         coordinate_status=coordinate_status_from_item(item),
                         image_url=image_url,
                         original_image_url=image_url,
-                        image_license=value_to_str(media.get("license") or item.get("license")),
+                        image_license=value_to_str(media.get("license")),
                         rights_holder=value_to_str(media.get("rightsHolder") or item.get("rightsHolder")),
                         accessed_at=now_iso(),
                         download_status="pending" if image_url else "no_image_url",
@@ -1258,6 +1288,7 @@ def symbiota_record_from_data(
         query_name=query_name,
         source_record_id=occurrence_id,
         source_record_url=detail_url,
+        **dwc_metadata(data),
         occurrence_id=value_to_str(data.get("occurrenceID")),
         institution_code=institution,
         collection_code=collection,
@@ -1425,6 +1456,7 @@ def ala_records(
                     source=source,
                     query_name=query_name,
                     source_record_id=uuid,
+                    **dwc_metadata(row),
                     source_record_url=record_url_template.format(uuid=uuid),
                     occurrence_id=value_to_str(row.get("occurrenceID")),
                     institution_code=value_to_str(row.get("raw_institutionCode") or row.get("institutionCode")),
@@ -1595,6 +1627,7 @@ def nhm_records(
                     source=source,
                     query_name=query_name,
                     source_record_id=value_to_str(row.get("_id") or row.get("occurrenceID")),
+                    **dwc_metadata(row),
                     source_record_url=record_url_template.format(id=value_to_str(row.get("_id") or row.get("occurrenceID"))),
                     occurrence_id=value_to_str(row.get("occurrenceID")),
                     institution_code=value_to_str(row.get("institutionCode")),
@@ -1710,6 +1743,7 @@ def dwca_record_from_row(
         source=source,
         query_name=query_name,
         source_record_id=record_id or catalog,
+        **dwc_metadata(row),
         source_record_url=source_url,
         occurrence_id=occurrence_id,
         institution_code=institution,

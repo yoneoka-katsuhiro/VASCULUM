@@ -13,7 +13,7 @@ from typing import Callable, Dict, List, Optional, Sequence, Tuple
 from urllib.parse import urlencode
 from urllib.request import Request, urlopen
 
-from .elevation import parse_elevation_meters, round_elevation
+from .elevation import specimen_elevation, round_elevation
 from .geocoding import haversine_km
 from .habitat import HabitatPreference
 from .models import CoordinateCandidate, LabelRead
@@ -516,7 +516,7 @@ def fetch_open_meteo_elevations(
 def selected_dem_elevation(candidate, label, settings, cache):
     if not candidate or not settings.enabled or candidate.candidate_geodetic_datum != "WGS84":
         return None
-    minimum, _ = parse_elevation_meters(label.elevation_text or label.label_transcription)
+    minimum, _ = specimen_elevation(label)
     if minimum is not None:
         return None
     key = (round(float(candidate.candidate_latitude), 7), round(float(candidate.candidate_longitude), 7))
@@ -784,7 +784,7 @@ def evaluate_habitat_compatibility(
     ]
     note_parts.extend(elevation_notes)
     if hard_conflict:
-        note_parts.append("hard ecological contradiction")
+        note_parts.append("potential habitat mismatch (heuristic)")
     return HabitatEvaluation(
         score=max(0.0, min(1.0, score)),
         hard_conflict=hard_conflict,
@@ -795,9 +795,7 @@ def evaluate_habitat_compatibility(
 def target_elevation(
     anchor: CoordinateCandidate, label: LabelRead
 ) -> Optional[float]:
-    minimum, maximum = parse_elevation_meters(
-        label.elevation_text or label.label_transcription
-    )
+    minimum, maximum = specimen_elevation(label)
     if minimum is not None and maximum is not None:
         return (minimum + maximum) / 2.0
     direct = number_or(anchor.candidate_elevation_meters, float("nan"))

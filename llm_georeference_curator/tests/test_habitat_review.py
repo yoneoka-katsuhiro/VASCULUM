@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import csv
 import json
+import os
 import sys
 import tempfile
 import unittest
@@ -30,6 +31,9 @@ def city_context(*_args):
         osm_type="way", osm_id=1, classes=("built_up",),
         geometry=((34.0, 137.0), (36.0, 137.0), (36.0, 139.0), (34.0, 139.0), (34.0, 137.0)),
     )])
+
+
+from test_offline import write_label_photos
 
 
 class HabitatReviewTests(unittest.TestCase):
@@ -117,25 +121,29 @@ class HabitatReviewTests(unittest.TestCase):
                 writer = csv.DictWriter(handle, fieldnames=fields, delimiter="\t")
                 writer.writeheader()
                 writer.writerows(records)
+            labels = write_label_photos(root, [
+                dict(catalogNumber="LABEL", labelTranscription="WGS84 35.123456 N, 138.123456 E", localityText="Specific mountain"),
+                dict(catalogNumber="LLM", labelTranscription="Specific mountain", localityText="Specific mountain"),
+            ], input_dir=source)
             all_results = []
-            with patch.dict("os.environ", {}, clear=True), patch("georeference_curator.llm.command_available", return_value=True), patch("georeference_curator.pipeline.make_client", return_value=Client()), patch("georeference_curator.pipeline.preflight_llm"), patch("georeference_curator.pipeline.review_selected_habitat", side_effect=advisory_review), patch("georeference_curator.pipeline.selected_dem_elevation", return_value=None):
+            with patch.dict("os.environ", {"PATH": os.environ.get("PATH", os.defpath)}, clear=True), patch("georeference_curator.llm.command_available", return_value=True), patch("georeference_curator.pipeline.make_client", return_value=Client()), patch("georeference_curator.pipeline.preflight_llm"), patch("georeference_curator.pipeline.review_selected_habitat", side_effect=advisory_review), patch("georeference_curator.pipeline.selected_dem_elevation", return_value=None):
                 for habitat in ("", "subalpine forest", "sea"):
                     destination = root / (habitat or "no_habitat")
                     report = run_pipeline(
                         project_dir=root, input_dir=source, input_dwc=None, output_dir=destination,
-                        label_tsv=None, gazetteer_tsv=None, dry_run=False, curation_mode="standard",
-                        original_precision_decimals=4, review_distance_km=5, exclude_insufficient_locality=True,
+                        label_tsv=labels, gazetteer_tsv=None, dry_run=False,
+                        review_distance_km=5,
                         llm_mode="on", llm_provider="codex-cli", llm_model="gpt-test", llm_reasoning_effort="medium",
                         llm_web_search="live", llm_command="test-cli", llm_api_key_env="OPENAI_API_KEY",
-                        llm_timeout_seconds=600, llm_rate_limit_retries=0, confirm_llm=False, georeferenced_by="test",
-                        prompt_profile="xie-modified", use_trails=False, use_hydrology=True, use_dem=True,
-                        use_vegetation_prior=True, taxon_habitat=habitat, debug_log=True,
+                        llm_rate_limit_retries=0, confirm_llm=False, georeferenced_by="test",
+                        use_trails=False, use_hydrology=True, use_dem=True,
+                        use_vegetation_prior=True, taxon_habitat=habitat,
                         workers="2", progress=TerminalProgress(False),
                         verify_source_urls=False, label_coordinate_uncertainty_meters=30,
                     )
                     with (destination / "modified_dwc.tsv").open() as handle:
                         rows = list(csv.DictReader(handle, delimiter="\t"))
-                    self.assertEqual(report.records_written, 3)
+                    self.assertEqual(report.records_written, 2)
                     all_results.append([(row["decimalLatitude"], row["decimalLongitude"], row["coordinateUncertaintyInMeters"]) for row in rows])
                     log = [json.loads(line) for line in (destination / "georeference.log.jsonl").read_text().splitlines()]
                     if habitat:
@@ -149,7 +157,7 @@ class HabitatReviewTests(unittest.TestCase):
                     self.assertEqual([entry["decision"] for entry in log], ["keep_original", "infer_missing", "infer_missing"])
                     selected_scores = [entry["selectedCandidate"]["score"] for entry in log]
                     self.assertEqual(selected_scores, ["", "", "0.80"])
-                    self.assertTrue(all(entry["includeInDwc"] for entry in log))
+                    self.assertEqual([entry["includeInDwc"] for entry in log], [True, True, False])
             self.assertEqual(all_results[0], all_results[1])
             self.assertEqual(all_results[0], all_results[2])
 

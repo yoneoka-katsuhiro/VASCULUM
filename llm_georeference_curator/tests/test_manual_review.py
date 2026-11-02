@@ -77,12 +77,12 @@ class ManualReviewTests(unittest.TestCase):
             self.assertNotIn("_vasculumMissMarkers", bundle.rows[0])
             self.assertIn("_vasculumMissMarkers", bundle.rows[1])
 
-    def test_manual_exclusion_overrides_baseline_and_trusted_coordinates(self):
+    def test_manual_exclusion_overrides_trusted_coordinates(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             write_rows(root / "input" / "dwc.tsv", [trusted_row(catalogNumber="BAD")])
             photo(root / "input" / "personal" / "images" / "miss_BAD.jpg")
-            report = run_pipeline(**pipeline_options(root, georeference_method="xie-baseline"))
+            report = run_pipeline(**pipeline_options(root))
             self.assertEqual(report.records_written, 0)
             self.assertEqual(report.excluded_manual_misidentification, 1)
 
@@ -150,6 +150,20 @@ class ManualReviewTests(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, "fresh --output"):
                 run_pipeline(**pipeline_options(root, export_images=True))
             self.assertEqual(unknown.read_bytes(), b"user original")
+
+
+    def test_managed_output_symlink_cannot_touch_source_images(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            photo = root / "input" / "images" / "GPS.jpg"
+            photo.parent.mkdir(parents=True)
+            photo.write_bytes(b"source photograph")
+            write_rows(root / "input" / "dwc.tsv", [trusted_row(associatedMedia="images/GPS.jpg")])
+            (root / "out").mkdir()
+            (root / "out" / "images").symlink_to(photo.parent, target_is_directory=True)
+            with self.assertRaisesRegex(ValueError, "symbolic link"):
+                run_pipeline(**pipeline_options(root, export_images=True))
+            self.assertEqual(photo.read_bytes(), b"source photograph")
 
 
 if __name__ == "__main__":

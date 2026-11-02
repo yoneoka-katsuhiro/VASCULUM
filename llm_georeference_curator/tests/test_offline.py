@@ -1,17 +1,19 @@
 from __future__ import annotations
 
 import csv
+import io
 import json
 import sys
 import tempfile
 import unittest
 from pathlib import Path
 from unittest.mock import patch
+from contextlib import redirect_stderr
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "scripts"))
 
-from georeference_curator.elevation import parse_elevation_meters, round_elevation
+from georeference_curator.elevation import parse_elevation_meters, round_elevation, specimen_elevation
 from georeference_curator.geocoding import extract_decimal_coordinates, is_precise_label_coordinate, match_gazetteer, GazetteerEntry
 from georeference_curator.geospatial_refinement import (
     GeospatialContext, GeospatialRefinementSettings, RoutePoint,
@@ -25,6 +27,7 @@ from georeference_curator.parallel import resolve_worker_count
 from georeference_curator.pipeline import run_pipeline
 from georeference_curator.progress import TerminalProgress, progress_bar
 from georeference_curator.scoring import SelectionOptions, original_coordinate_status, select_result
+from curate_georeferences import parse_args
 
 
 def write_rows(path, rows):
@@ -41,23 +44,36 @@ def read_rows(path):
         return list(csv.DictReader(handle, delimiter="\t"))
 
 
+def write_label_photos(root, labels, input_dir=None):
+    labels = [dict(row) for row in labels]
+    for row in labels:
+        relative = "images/" + row["catalogNumber"] + ".jpg"
+        photo = (input_dir or root / "input") / relative
+        photo.parent.mkdir(parents=True, exist_ok=True)
+        photo.write_bytes(b"whole specimen photograph")
+        row["imagePath"] = relative
+    path = root / "labels.tsv"
+    write_rows(path, labels)
+    return path
+
+
 def pipeline_options(root, **overrides):
     values = dict(
         project_dir=root, input_dir=root / "input", input_dwc=None, output_dir=root / "out",
-        label_tsv=None, gazetteer_tsv=None, dry_run=False, curation_mode="standard",
-        original_precision_decimals=4, review_distance_km=5, exclude_insufficient_locality=True,
+        label_tsv=None, gazetteer_tsv=None, dry_run=False,
+        review_distance_km=5,
         llm_mode="off", llm_provider="codex-cli", llm_model="gpt-test", llm_reasoning_effort="medium",
-        llm_web_search="live", llm_command="", llm_api_key_env="OPENAI_API_KEY", llm_timeout_seconds=600,
-        llm_rate_limit_retries=0, confirm_llm=False, georeferenced_by="test", prompt_profile="xie-modified",
+        llm_web_search="live", llm_command="", llm_api_key_env="OPENAI_API_KEY",
+        llm_rate_limit_retries=0, confirm_llm=False, georeferenced_by="test",
         use_trails=True, use_hydrology=True, use_dem=False, use_vegetation_prior=True,
-        taxon_habitat="", debug_log=True, workers="1", progress=TerminalProgress(False), verify_source_urls=False,
+        taxon_habitat="", workers="1", progress=TerminalProgress(False), verify_source_urls=False, geospatial_refinement=False,
     )
     values.update(overrides)
     return values
 
 
 def select(row=None, label=None, coordinates=None, candidates=None, options=None, insufficient="", matches=None):
-    return select_result(row or {}, label or LabelRead(), coordinates or [], candidates or [], matches or [], insufficient, True, options or SelectionOptions())
+    return select_result(row or {}, label or LabelRead(), coordinates or [], candidates or [], matches or [], insufficient, options or SelectionOptions())
 
 
 def trusted_row(**overrides):
@@ -69,6 +85,32 @@ def trusted_row(**overrides):
 
 
 class OfflineTests(unittest.TestCase):
+    def test_curation_mode_switches_are_removed(self):
+        with patch.object(sys, "argv", ["curate", "--input", "input"]):
+            args = parse_args()
+        self.assertFalse(hasattr(args, "curation_mode"))
+        for flags in (["--robust"], ["--standard"], ["--curation-mode", "robust"]):
+            with self.subTest(flags=flags), patch.object(sys, "argv", ["curate", "--input", "input", *flags]), redirect_stderr(io.StringIO()) as stderr:
+                with self.assertRaises(SystemExit) as error:
+                    parse_args()
+                self.assertEqual(error.exception.code, 2)
+                self.assertIn("unrecognized arguments", stderr.getvalue())
+
+    def test_record_processing_failure_is_audited_not_exported(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            write_rows(root / "input" / "dwc.tsv", [trusted_row()])
+            with patch("georeference_curator.pipeline.process_row", side_effect=RuntimeError("test record error")):
+                report = run_pipeline(**pipeline_options(root, export_images=True))
+            self.assertEqual(report.records_written, 0)
+            self.assertEqual(report.images_exported, 0)
+            self.assertEqual(report.failed, 1)
+            self.assertEqual(read_rows(root / "out" / "modified_dwc.tsv"), [])
+            log = json.loads((root / "out" / "georeference.log.jsonl").read_text())
+            self.assertEqual(log["curationStatus"], "failed")
+            self.assertFalse(log["includeInDwc"])
+            self.assertEqual(log["stageErrors"][0]["stage"], "record_processing")
+
     def test_progress_models_languages_and_workers(self):
         self.assertEqual(progress_bar(0, 149), "[--------------------]")
         self.assertEqual(progress_bar(13, 149), "[==------------------]")
@@ -78,6 +120,15 @@ class OfflineTests(unittest.TestCase):
         self.assertEqual(normalize_provider("opus"), "opus5")
         self.assertEqual(model_candidates_for(LlmSettings())[0], "gpt-6.1-sol")
         self.assertGreaterEqual(resolve_worker_count("auto", project_dir=ROOT, provider="codex-cli", model_label="gpt-test", web_search_mode="indexed", records=10), 1)
+
+    def test_label_distances_are_not_elevations(self):
+        self.assertEqual(specimen_elevation(LabelRead(label_transcription="200 m from village; 50 m from river")), (None, None))
+        self.assertEqual(specimen_elevation(LabelRead(label_transcription="200 m from village. Alt. 6500 ft")), (1981, 1981))
+        self.assertEqual(specimen_elevation(LabelRead(label_transcription="Forest, 2000-2100 m a.s.l.")), (2000, 2100))
+        self.assertEqual(specimen_elevation(LabelRead(elevation_text="2040 m")), (2040, 2040))
+        result = select(row=trusted_row(verbatimElevation="2040 m"), label=LabelRead(label_transcription="200 m from village"))
+        self.assertEqual(result.row["minimumElevationInMeters"], "2040")
+        self.assertIn("elevation_source=original_dwc", result.row["georeferenceRemarks"])
 
     def test_dms_and_decimal_hemispheres(self):
         for text, lat, lon, kind in (
@@ -102,11 +153,11 @@ class OfflineTests(unittest.TestCase):
         raw = extract_decimal_coordinates("WGS84 23°31′22″ N, 120°48′30″ E")
         self.assertTrue(is_precise_label_coordinate(raw[0]))
         self.assertFalse(is_precise_label_coordinate(extract_decimal_coordinates("23°31′22″ N, 120°48′30″ E")[0]))
-        review = select(coordinates=raw, options=SelectionOptions(curation_mode="robust"))
+        review = select(coordinates=raw)
         self.assertEqual(review.row["decimalLatitude"], "23.522778")
         self.assertEqual(review.row["coordinateUncertaintyInMeters"], "")
         self.assertFalse(review.include_in_dwc)
-        accepted = select(coordinates=raw, options=SelectionOptions(curation_mode="robust", label_coordinate_uncertainty_meters=30))
+        accepted = select(coordinates=raw, options=SelectionOptions(label_coordinate_uncertainty_meters=30))
         self.assertEqual(accepted.curation_status, "accepted")
         self.assertTrue(accepted.include_in_dwc)
         self.assertEqual(accepted.row["coordinateUncertaintyInMeters"], "60")
@@ -123,7 +174,7 @@ class OfflineTests(unittest.TestCase):
             ({"decimalLatitude": "nan"}, "missing"),
         ):
             self.assertEqual(original_coordinate_status(trusted_row(**changes)), expected)
-        result = select(row=trusted_row(), options=SelectionOptions(curation_mode="robust"))
+        result = select(row=trusted_row())
         self.assertEqual(result.decision, "keep_original")
         self.assertEqual(result.curation_status, "accepted")
 
@@ -145,14 +196,14 @@ class OfflineTests(unittest.TestCase):
         candidates = llm_response_to_candidates({"coordinateCandidates": [
             {"latitude": "35.123456", "longitude": "138.123456", "geodeticDatum": "WGS84", "uncertaintyMeters": "5", "score": "1.0", "candidateType": "refined_georeference"},
         ]}, LabelRead(), "test")
-        result = select(candidates=candidates, options=SelectionOptions(curation_mode="robust"))
+        result = select(candidates=candidates)
         self.assertEqual(result.curation_status, "review")
         self.assertFalse(result.include_in_dwc)
         self.assertEqual(result.row["coordinateUncertaintyInMeters"], "")
         self.assertEqual(candidates[0].reported_uncertainty_meters, "5")
 
     def test_uncertainty_limit_and_documented_conflicts(self):
-        result = select(row=trusted_row(), options=SelectionOptions(curation_mode="robust", max_uncertainty_meters=20))
+        result = select(row=trusted_row(), options=SelectionOptions(max_uncertainty_meters=20))
         self.assertFalse(result.include_in_dwc)
         raw = extract_decimal_coordinates("WGS84 N 25.123456 E 121.123456")
         result = select(row=trusted_row(), coordinates=raw, options=SelectionOptions(label_coordinate_uncertainty_meters=30))
@@ -160,7 +211,7 @@ class OfflineTests(unittest.TestCase):
         self.assertTrue(any("Conflicting" in note for note in result.notes))
 
     def test_insufficient_locality_and_unread_images_are_distinct(self):
-        unknown = select(row={"country": "China"}, label=LabelRead(image_path="not-read.jpg", label_status="image_not_transcribed"), insufficient="country_only", options=SelectionOptions(curation_mode="robust"))
+        unknown = select(row={"country": "China"}, label=LabelRead(image_path="not-read.jpg", label_status="image_not_transcribed"), insufficient="country_only")
         self.assertEqual(unknown.curation_status, "unresolved")
         self.assertFalse(unknown.include_in_dwc)
         broad = select(row={"country": "China"}, label=LabelRead(label_status="llm_image_transcribed"), insufficient="country_only")
@@ -170,7 +221,7 @@ class OfflineTests(unittest.TestCase):
         row = dict(country="Japan", stateProvince="Nagano", locality="Old Example Mountain")
         entry = GazetteerEntry("New Example Mountain", "35.123456", "138.123456", country="Japan", state_province="Nagano", historical_place_name="Old Example Mountain", uncertainty_meters="300", geodetic_datum="WGS84", verified=True, source="survey-2020")
         matches = match_gazetteer(row, "", [entry])
-        result = select(row=row, matches=matches, options=SelectionOptions(curation_mode="robust"))
+        result = select(row=row, matches=matches)
         self.assertTrue(result.include_in_dwc)
         self.assertEqual(result.selected_candidate.historical_place_name, "Old Example Mountain")
         self.assertEqual(result.selected_candidate.support_status, "verified_reference")
@@ -212,18 +263,20 @@ class OfflineTests(unittest.TestCase):
             self.assertEqual(dry.records_read, 3)
             self.assertFalse((root / "out").exists())
             first = run_pipeline(**args)
-            self.assertEqual(first.records_written, 2)
+            self.assertEqual(first.records_written, 1)
+            self.assertEqual([row["catalogNumber"] for row in read_rows(root / "out" / "modified_dwc.tsv")], ["GPS"])
             self.assertEqual(first.accepted, 1)
-            self.assertEqual(first.excluded_insufficient_locality, 1)
-            self.assertEqual(set(path.name for path in (root / "out").iterdir()), {"modified_dwc.csv", "modified_dwc.tsv", "georeference_candidates.tsv", "summary.txt", "georeference.log.jsonl"})
+            self.assertEqual(first.excluded_missing_source_image, 2)
+            self.assertEqual(set(path.name for path in (root / "out").iterdir()), {"modified_dwc.csv", "modified_dwc.tsv", "georeference_candidates.tsv", "summary.txt", "georeference.log.jsonl", "georeference_flow.pdf"})
             second = run_pipeline(**args)
             self.assertEqual(second.resumed_records, 3)
-            robust = run_pipeline(**dict(args, curation_mode="robust", output_dir=root / "robust"))
-            self.assertEqual(robust.records_written, 1)
-            self.assertEqual(read_rows(root / "robust" / "modified_dwc.tsv")[0]["catalogNumber"], "GPS")
+            self.assertEqual(second.records_written, 1)
             log = [json.loads(line) for line in (root / "out" / "georeference.log.jsonl").read_text().splitlines()]
             self.assertIn("originalCoordinates", log[0])
             self.assertTrue(log[0]["provenance"]["checkpointReused"])
+            self.assertEqual(len(log), 3)
+            self.assertEqual([entry["includeInDwc"] for entry in log], [True, False, False])
+            self.assertIn("Final DwC policy: accepted records only", (root / "out" / "summary.txt").read_text())
 
 
 if __name__ == "__main__":

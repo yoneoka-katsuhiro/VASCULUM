@@ -148,7 +148,6 @@ class PersonalInputsTests(unittest.TestCase):
             with self.assertRaises(FileNotFoundError):
                 load_inputs(root, include_personal=False)
             write_rows(root / "dwc.tsv", [trusted_row()])
-            self.assertEqual(load_inputs(root, include_images=False).photo_only_records, 0)
 
     def test_same_photo_stem_in_different_subdirectories_stays_distinct(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -174,7 +173,13 @@ class PersonalInputsTests(unittest.TestCase):
             edited = run_pipeline(**args)
             self.assertEqual(edited.resumed_records, 1)
             exported = read_rows(root / "out" / "modified_dwc.tsv")
-            self.assertEqual(next(row for row in exported if row["catalogNumber"] == "MY1")["locality"], "Edited trail")
+            self.assertEqual([row["catalogNumber"] for row in exported], ["GPS"])
+            log = [json.loads(line) for line in (root / "out" / "georeference.log.jsonl").read_text().splitlines()]
+            personal_result = next(entry for entry in log if entry["catalogNumber"] == "MY1")
+            self.assertFalse(personal_result["includeInDwc"])
+            candidates = read_rows(root / "out" / "georeference_candidates.tsv")
+            self.assertEqual(personal_result["decision"], "exclude_missing_source_image")
+            self.assertEqual(len(candidates), 2)
 
     def test_both_whole_images_reach_label_stage_and_candidate_audit(self):
         class Client:
@@ -195,7 +200,7 @@ class PersonalInputsTests(unittest.TestCase):
                 clients.append(client)
                 return client
             with patch("georeference_curator.llm.command_available", return_value=True), patch("georeference_curator.pipeline.make_client", side_effect=factory), patch("georeference_curator.pipeline.preflight_llm"):
-                report = run_pipeline(**pipeline_options(root, llm_mode="on", curation_mode="robust", label_coordinate_uncertainty_meters=30))
+                report = run_pipeline(**pipeline_options(root, llm_mode="on", label_coordinate_uncertainty_meters=30))
             self.assertEqual(len(clients[0].calls), 0)
             self.assertEqual(len(clients[1].calls), 1)
             self.assertEqual(report.accepted, 2)
@@ -206,7 +211,7 @@ class PersonalInputsTests(unittest.TestCase):
             log = [json.loads(line) for line in (root / "out" / "georeference.log.jsonl").read_text().splitlines()]
             self.assertEqual(len(log[1]["provenance"]["images"]), 2)
 
-    def test_dwc_only_personal_records_reach_research(self):
+    def test_dwc_only_untrusted_records_do_not_reach_research(self):
         class Client:
             calls = []
             def create_json(self, prompt, image_paths=None):
@@ -220,9 +225,9 @@ class PersonalInputsTests(unittest.TestCase):
             with patch("georeference_curator.llm.command_available", return_value=True), patch("georeference_curator.pipeline.make_client", return_value=client), patch("georeference_curator.pipeline.preflight_llm"):
                 report = run_pipeline(**pipeline_options(root, llm_mode="on"))
             self.assertEqual(report.personal_dwc_records, 1)
-            self.assertEqual(len(client.calls), 1)
-            self.assertEqual(client.calls[0][1], [])
-            self.assertIn("Specific mountain trail", client.calls[0][0])
+            self.assertEqual(len(client.calls), 0)
+            self.assertEqual(report.excluded_missing_source_image, 1)
+            self.assertEqual(report.records_written, 1)
 
     def test_cli_exposes_manual_input_workflow(self):
         with tempfile.TemporaryDirectory() as directory:
