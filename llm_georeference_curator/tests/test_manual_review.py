@@ -27,7 +27,7 @@ class ManualReviewTests(unittest.TestCase):
             write_rows(root / "input" / "dwc.tsv", [trusted_row(catalogNumber="BAD", associatedMedia="images/BAD_Taxon.jpg")])
             marked = root / "input" / "images" / "miss_BAD_Taxon.jpg"
             photo(marked)
-            with patch("georeference_curator.llm.command_available", return_value=True), patch("georeference_curator.pipeline.make_client", return_value=ForbiddenClient()), patch("georeference_curator.pipeline.preflight_llm"):
+            with patch("georeference_curator.llm.resolve_cli_command", return_value="/test/bin/codex"), patch("georeference_curator.llm.command_available", return_value=True), patch("georeference_curator.pipeline.make_client", return_value=ForbiddenClient()), patch("georeference_curator.pipeline.preflight_llm"):
                 report = run_pipeline(**pipeline_options(root, llm_mode="on", export_images=True))
             self.assertEqual(report.excluded_manual_misidentification, 1)
             self.assertEqual(report.records_written, 0)

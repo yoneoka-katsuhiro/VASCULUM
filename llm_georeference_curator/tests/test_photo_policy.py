@@ -73,7 +73,7 @@ class PhotoPolicyTests(unittest.TestCase):
             image = root / "input" / "images" / "A.jpg"
             image.parent.mkdir()
             image.write_bytes(b"whole sheet")
-            with patch("georeference_curator.llm.command_available", return_value=True), patch("georeference_curator.pipeline.make_client", side_effect=Client), patch("georeference_curator.pipeline.preflight_llm"):
+            with patch("georeference_curator.llm.resolve_cli_command", return_value="/test/bin/codex"), patch("georeference_curator.llm.command_available", return_value=True), patch("georeference_curator.pipeline.make_client", side_effect=Client), patch("georeference_curator.pipeline.preflight_llm"):
                 report = run_pipeline(**pipeline_options(root, llm_mode="on", label_coordinate_uncertainty_meters=30))
             self.assertEqual([task for task, _ in calls], ["transcription_only"])
             self.assertEqual(len(calls[0][1]), 1)
@@ -98,7 +98,7 @@ class PhotoPolicyTests(unittest.TestCase):
             image = root / "input" / "images" / "A.jpg"
             image.parent.mkdir()
             image.write_bytes(b"whole sheet")
-            with patch("georeference_curator.llm.command_available", return_value=True), patch("georeference_curator.pipeline.make_client", side_effect=Client), patch("georeference_curator.pipeline.preflight_llm"):
+            with patch("georeference_curator.llm.resolve_cli_command", return_value="/test/bin/codex"), patch("georeference_curator.llm.command_available", return_value=True), patch("georeference_curator.pipeline.make_client", side_effect=Client), patch("georeference_curator.pipeline.preflight_llm"):
                 report = run_pipeline(**pipeline_options(root, llm_mode="on"))
             self.assertEqual([task for task, _, _ in calls], ["transcription_only", "georeference"])
             self.assertIn("Specific old trail, camp 2", calls[1][1])
@@ -129,7 +129,7 @@ class PhotoPolicyTests(unittest.TestCase):
                         if self.settings.task_mode != "transcription_only":
                             raise AssertionError("DwC locality must not rescue an unreadable or broad label")
                         return response
-                with patch("georeference_curator.llm.command_available", return_value=True), patch("georeference_curator.pipeline.make_client", side_effect=Client), patch("georeference_curator.pipeline.preflight_llm"):
+                with patch("georeference_curator.llm.resolve_cli_command", return_value="/test/bin/codex"), patch("georeference_curator.llm.command_available", return_value=True), patch("georeference_curator.pipeline.make_client", side_effect=Client), patch("georeference_curator.pipeline.preflight_llm"):
                     report = run_pipeline(**pipeline_options(root, llm_mode="on", label_coordinate_uncertainty_meters=30))
                 self.assertEqual(calls, ["transcription_only"])
                 self.assertEqual(report.records_written, 0)

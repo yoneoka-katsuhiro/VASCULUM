@@ -199,7 +199,7 @@ class PersonalInputsTests(unittest.TestCase):
                 client = Client(settings)
                 clients.append(client)
                 return client
-            with patch("georeference_curator.llm.command_available", return_value=True), patch("georeference_curator.pipeline.make_client", side_effect=factory), patch("georeference_curator.pipeline.preflight_llm"):
+            with patch("georeference_curator.llm.resolve_cli_command", return_value="/test/bin/codex"), patch("georeference_curator.llm.command_available", return_value=True), patch("georeference_curator.pipeline.make_client", side_effect=factory), patch("georeference_curator.pipeline.preflight_llm"):
                 report = run_pipeline(**pipeline_options(root, llm_mode="on", label_coordinate_uncertainty_meters=30))
             self.assertEqual(len(clients[0].calls), 0)
             self.assertEqual(len(clients[1].calls), 1)
@@ -222,7 +222,7 @@ class PersonalInputsTests(unittest.TestCase):
             write_rows(root / "input" / "dwc.tsv", [trusted_row()])
             write_rows(root / "input" / "personal" / "dwc.tsv", [dict(catalogNumber="MY1", country="Japan", locality="Specific mountain trail")])
             client = Client()
-            with patch("georeference_curator.llm.command_available", return_value=True), patch("georeference_curator.pipeline.make_client", return_value=client), patch("georeference_curator.pipeline.preflight_llm"):
+            with patch("georeference_curator.llm.resolve_cli_command", return_value="/test/bin/codex"), patch("georeference_curator.llm.command_available", return_value=True), patch("georeference_curator.pipeline.make_client", return_value=client), patch("georeference_curator.pipeline.preflight_llm"):
                 report = run_pipeline(**pipeline_options(root, llm_mode="on"))
             self.assertEqual(report.personal_dwc_records, 1)
             self.assertEqual(len(client.calls), 0)

@@ -107,7 +107,7 @@ class PolicyTests(unittest.TestCase):
             photo.parent.mkdir(parents=True)
             photo.write_bytes(b"whole specimen photograph")
             write_rows(root / "input" / "dwc.tsv", [dict(catalogNumber="A", associatedMedia="images/A.jpg")])
-            with patch("georeference_curator.pipeline.make_client", return_value=Client()), patch("georeference_curator.pipeline.preflight_llm"):
+            with patch("georeference_curator.llm.resolve_cli_command", return_value="/test/bin/codex"), patch("georeference_curator.llm.command_available", return_value=True), patch("georeference_curator.pipeline.make_client", return_value=Client()), patch("georeference_curator.pipeline.preflight_llm"):
                 report = run_pipeline(**pipeline_options(root, llm_mode="on"))
             self.assertEqual(report.review, 1)
             self.assertEqual(report.records_written, 0)
@@ -153,7 +153,7 @@ class PolicyTests(unittest.TestCase):
         gate = RateLimitBackoff(max_calls=1)
         client = CodexCliClient(LlmSettings())
         client.request_gate = gate.reserve_call
-        with patch.dict("os.environ", {}, clear=True), patch("georeference_curator.llm.subprocess.run", return_value=subprocess.CompletedProcess([], 1, "", "model not found")) as runner:
+        with patch.dict("os.environ", {}, clear=True), patch("georeference_curator.llm.resolve_cli_command", return_value="/test/bin/codex"), patch("georeference_curator.llm.subprocess.run", return_value=subprocess.CompletedProcess([], 1, "", "model not found")) as runner:
             with self.assertRaisesRegex(RuntimeError, "budget reached"):
                 client.create_json("test")
         self.assertEqual(runner.call_count, 1)
@@ -196,7 +196,7 @@ class PolicyTests(unittest.TestCase):
             client = Client()
             labels = write_label_photos(root, [dict(catalogNumber="A", labelTranscription="Mt Example trail", localityText="Mt Example trail")])
             args = pipeline_options(root, llm_mode="on", label_tsv=labels)
-            with patch("georeference_curator.llm.command_available", return_value=True), patch("georeference_curator.pipeline.make_client", return_value=client), patch("georeference_curator.pipeline.preflight_llm"):
+            with patch("georeference_curator.llm.resolve_cli_command", return_value="/test/bin/codex"), patch("georeference_curator.llm.command_available", return_value=True), patch("georeference_curator.pipeline.make_client", return_value=client), patch("georeference_curator.pipeline.preflight_llm"):
                 first = run_pipeline(**args)
                 second = run_pipeline(**args)
             self.assertEqual(client.calls, 1)
@@ -225,7 +225,7 @@ class PolicyTests(unittest.TestCase):
             write_rows(root / "input" / "dwc.tsv", [dict(catalogNumber="A", country="Japan", locality="Mt Example trail")])
             labels = write_label_photos(root, [dict(catalogNumber="A", labelTranscription="Mt Example trail", localityText="Mt Example trail")])
             args = pipeline_options(root, llm_mode="on", llm_command="/bin/true", label_tsv=labels)
-            with patch("georeference_curator.llm.command_available", return_value=True), patch("georeference_curator.pipeline.make_client", return_value=Client()), patch("georeference_curator.pipeline.preflight_llm"):
+            with patch("georeference_curator.llm.resolve_cli_command", return_value="/test/bin/codex"), patch("georeference_curator.llm.command_available", return_value=True), patch("georeference_curator.pipeline.make_client", return_value=Client()), patch("georeference_curator.pipeline.preflight_llm"):
                 first = run_pipeline(**args)
                 second = run_pipeline(**args)
             self.assertEqual(first.failed, 1)
@@ -249,7 +249,7 @@ class PolicyTests(unittest.TestCase):
             write_rows(root / "input" / "dwc.tsv", [dict(catalogNumber="LABEL", country="Japan", locality="Mt Example trail", verbatimCoordinates="WGS84 N 35.123456 E 138.123456")])
             labels = write_label_photos(root, [dict(catalogNumber="LABEL", labelTranscription="WGS84 N 35.123456 E 138.123456", localityText="Mt Example trail")])
             client = Client()
-            with patch("georeference_curator.llm.command_available", return_value=True), patch("georeference_curator.pipeline.make_client", return_value=client), patch("georeference_curator.pipeline.preflight_llm"):
+            with patch("georeference_curator.llm.resolve_cli_command", return_value="/test/bin/codex"), patch("georeference_curator.llm.command_available", return_value=True), patch("georeference_curator.pipeline.make_client", return_value=client), patch("georeference_curator.pipeline.preflight_llm"):
                 report = run_pipeline(**pipeline_options(root, llm_mode="on", llm_command="/bin/true", label_tsv=labels, label_coordinate_uncertainty_meters=30))
             self.assertEqual(client.calls, 0)
             self.assertEqual(report.accepted, 1)
