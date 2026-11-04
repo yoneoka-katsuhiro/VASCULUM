@@ -78,12 +78,23 @@ def adaptive_image_evaluation_mode(species_count: int) -> tuple[str, int]:
 
 
 def font_path() -> str:
+    configured = os.environ.get("VASCULUM_FONT_PATH", "").strip()
+    if configured:
+        if not Path(configured).is_file():
+            raise ValueError(f"VASCULUM_FONT_PATH does not exist: {configured}")
+        return configured
+    windows_fonts = Path(os.environ.get("WINDIR", "C:/Windows")) / "Fonts"
     candidates = [
         "/System/Library/Fonts/ヒラギノ角ゴシック W3.ttc",
         "/System/Library/Fonts/Hiragino Sans GB.ttc",
         "/System/Library/Fonts/Supplemental/Arial Unicode.ttf",
         "/Library/Fonts/Arial Unicode.ttf",
         "/System/Library/Fonts/Supplemental/Arial.ttf",
+        str(windows_fonts / "YuGothR.ttc"),
+        str(windows_fonts / "meiryo.ttc"),
+        str(windows_fonts / "arial.ttf"),
+        "/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc",
+        "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
     ]
     for candidate in candidates:
         if Path(candidate).exists():
@@ -95,7 +106,7 @@ def load_font(size: int) -> ImageFont.ImageFont:
     path = font_path()
     if path:
         return ImageFont.truetype(path, size)
-    return ImageFont.load_default()
+    return ImageFont.load_default(size=size)
 
 
 def text_size(draw: ImageDraw.ImageDraw, text: str, font: ImageFont.ImageFont) -> tuple[int, int]:
@@ -604,7 +615,6 @@ def codex_assess_candidates(
     selected_url = ""
     selected_sha256 = ""
     selected_index: int | None = None
-    valid_specimen_count: int | None = None
     diagnostic_sufficiency = "sufficient"
     if isinstance(assessment, dict):
         rejected_record_ids = {
@@ -628,10 +638,6 @@ def codex_assess_candidates(
             or ""
         )
         selected_sha256 = str(assessment.get("selected_sha256") or assessment.get("sha256") or "")
-        try:
-            valid_specimen_count = int(assessment.get("valid_specimen_count"))
-        except (TypeError, ValueError):
-            valid_specimen_count = None
         raw_sufficiency = str(assessment.get("diagnostic_sufficiency") or "").strip().lower()
         if raw_sufficiency in {"sufficient", "insufficient"}:
             diagnostic_sufficiency = raw_sufficiency

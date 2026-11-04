@@ -3,14 +3,16 @@
 CheckList reverse-searches plant species from a geographic condition and
 generates a visual checklist PDF from herbarium specimen records and images.
 
-Version: `v0.1.2`
+Version: `v0.1.3`
 
 ## Requirements
 
-- macOS or Linux
-- Python 3.9 or newer
+- macOS, Windows, or Linux
+- Python 3.11 or newer
 - A contact email for polite HTTP identification
 - Codex CLI access for AI-assisted specimen-image selection
+
+For Windows and standalone downloads, see the [English manual](../docs/MANUAL_EN.md) or [日本語マニュアル](../docs/MANUAL_JA.md).
 
 ## Setup
 

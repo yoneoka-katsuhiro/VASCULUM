@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import math
 import re
+import sys
 import tempfile
 from datetime import datetime
 from pathlib import Path
@@ -9,6 +11,7 @@ from specimen_collector.http_client import PoliteHttpClient
 
 from . import CHECKLIST_VERSION
 from .models import ChecklistReport, SearchArea, SourceReport, TaxonFilter, safe_token
+from .geo import circle_wkt
 from .outputs import write_outputs
 from .pdf import download_representative_images, require_codex_image_selector
 from .runtime import load_env_file, read_json, vasculum_version
@@ -42,7 +45,8 @@ def normalize_sources(names: list[str] | None) -> list[str]:
 def checklist_output_dir(project_dir: Path, title: str, area: SearchArea) -> Path:
     date = datetime.now().astimezone().date().isoformat()
     token = safe_token(title or area.label() or "checklist")
-    return project_dir / "output" / "checklist" / f"{date}_{token}"
+    root = Path.cwd() if getattr(sys, "frozen", False) else project_dir
+    return root / "output" / "checklist" / f"{date}_{token}"
 
 
 def run_checklist(
@@ -65,6 +69,10 @@ def run_checklist(
 ) -> ChecklistReport:
     load_env_file(project_dir / ".env")
     area.validate()
+    if area.radius_km is not None:
+        circle_wkt(area.latitude, area.longitude, area.radius_km)
+    if not math.isfinite(image_radius_max) or image_radius_max <= 0:
+        raise ValueError("--image-radius-max must be a finite number greater than 0 km.")
     if page_size <= 0:
         raise ValueError("--page-size must be greater than 0.")
     if max_gbif_records is not None and max_gbif_records <= 0:
@@ -80,6 +88,8 @@ def run_checklist(
     unknown = [source for source in sources if source not in SOURCE_ALIASES.values()]
     if unknown:
         raise ValueError(f"Unknown CheckList source names: {', '.join(unknown)}")
+    if "gbif" not in sources:
+        raise ValueError("--sources must include gbif; CVH supplies images, not regional evidence.")
 
     settings = read_json(project_dir / "config" / "source_settings.json")
     family_ranks = load_family_order(project_dir)
@@ -172,7 +182,6 @@ def run_checklist(
         if message.startswith("partial:"):
             report.errors.append(f"gbif_images: {message}")
 
-    report.finished_at = datetime.now().astimezone()
     cvh_enabled = "cvh" in report.sources
     cvh_settings = dict(settings.get("cvh", {})) if cvh_enabled else None
     with tempfile.TemporaryDirectory(prefix="vasculum_checklist_cvh_") as cvh_temp:
@@ -204,5 +213,6 @@ def run_checklist(
         species=sum(1 for entry in report.species if entry.local_image_path),
         message="representative images downloaded for PDF",
     )
+    report.finished_at = datetime.now().astimezone()
     write_outputs(report, client)
     return report

@@ -1,0 +1,2 @@
+-r herbarium_specimen_collector/requirements.txt
+pyinstaller==6.22.3

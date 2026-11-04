@@ -13,14 +13,12 @@ from .http_client import PoliteHttpClient
 from .images import (
     count_referenced_images,
     download_images,
-    gbif_image_cache_urls,
     prune_unreferenced_images,
 )
 from .models import SpecimenRecord
 from .outputs import RunReport, SourceReport, write_dwc_exports, write_summary
 from .progress import TerminalProgress
 from .records import (
-    collection_event_key,
     deduplicate,
     duplicate_gathering_count,
 )
@@ -283,7 +281,7 @@ def run_pipeline(
     output_dir: Path | None = None,
     gbif_occurrence_mode: str | None = None,
     gbif_coordinate_filter: str | None = None,
-    keep_unreferenced_images: bool = False,
+    keep_unreferenced_images: bool = True,
 ) -> RunReport:
     load_env_file(project_dir / ".env")
     settings = read_json(project_dir / "config" / "source_settings.json")
@@ -315,7 +313,7 @@ def run_pipeline(
     destination = (
         output_dir.resolve()
         if output_dir
-        else project_dir / "output" / safe_token(accepted_name)
+        else (Path.cwd() if getattr(sys, "frozen", False) else project_dir) / "output" / safe_token(accepted_name)
     )
     started_at = datetime.now().astimezone()
     report = RunReport(
@@ -409,6 +407,8 @@ def run_pipeline(
                 )
 
         report.records_found = len(records)
+        if not records and report.errors:
+            raise RuntimeError("No records could be collected; existing outputs were preserved. " + "; ".join(report.errors))
         report.records = deduplicate(records)
         progress.set_totals(
             records_found=report.records_found,
@@ -429,11 +429,9 @@ def run_pipeline(
         for error in progress.errors:
             if error not in report.errors:
                 report.errors.append(error)
-        # Remove JPEGs that the current DwC no longer references so that the
-        # number of files in output/images equals the reported image count.
-        # This runs even after a partial run (errors present); pass
-        # keep_unreferenced_images to preserve images from earlier runs instead.
-        if not skip_images and not keep_unreferenced_images:
+        # A portal outage or download failure must never delete prior evidence.
+        # Cleanup is explicitly requested and only runs after a complete run.
+        if not skip_images and not keep_unreferenced_images and not report.errors:
             prune_unreferenced_images(destination, report.records)
         for source, row in progress.rows.items():
             report.sources[source].retries = row.retries
@@ -455,8 +453,8 @@ def run_pipeline(
         )
 
         report.finished_at = datetime.now().astimezone()
-        write_dwc_exports(destination, report.records, accepted_name)
-        write_summary(destination / "summary.txt", report)
+        write_dwc_exports(destination, report.records, accepted_name, stem=report.export_stem)
+        write_summary(destination / report.summary_filename, report)
         progress.set_task(f"complete - {destination}")
     finally:
         progress.finish()
