@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Build native standalone CLI tools; run this on each target operating system."""
 from __future__ import annotations
+import ast
 import hashlib
 import importlib.metadata
 import json
@@ -13,6 +14,58 @@ import sysconfig
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
+
+
+def collect_native_conda_licenses(stage: Path) -> list[dict]:
+    """Match bundled binary paths to installed Conda records and keep notices."""
+    base = Path(sys.base_prefix)
+    metadata_dir = base / "conda-meta"
+    if not metadata_dir.is_dir():
+        return []
+    native_files: set[Path] = set()
+
+    def visit(value: object) -> None:
+        if isinstance(value, (tuple, list)):
+            if len(value) == 3 and isinstance(value[1], str) and value[2] in ("BINARY", "EXTENSION"):
+                native_files.add(Path(value[1]).resolve())
+            for item in value:
+                visit(item)
+
+    for name in ("vasculum-collect", "vasculum-checklist"):
+        toc = ROOT / "build" / name / name / "Analysis-00.toc"
+        if not toc.is_file():
+            raise RuntimeError(f"Native dependency analysis is missing: {toc}")
+        visit(ast.literal_eval(toc.read_text(encoding="utf-8")))
+
+    inventory: list[dict] = []
+    destination = stage / "THIRD_PARTY_LICENSES" / "native-conda"
+    for metadata_file in sorted(metadata_dir.glob("*.json")):
+        record = json.loads(metadata_file.read_text(encoding="utf-8"))
+        matched = sorted(path for path in record.get("files", []) if (base / path).resolve() in native_files)
+        if not matched:
+            continue
+        cache = Path(record.get("link", {}).get("source") or (base / "pkgs" / metadata_file.stem))
+        licenses = cache / "info" / "licenses"
+        if not licenses.is_dir() or not any(licenses.rglob("*")):
+            raise RuntimeError(f"Native dependency licence notices are missing for {metadata_file.stem}; restore its Conda package cache before distributing.")
+        package_destination = destination / metadata_file.stem
+        shutil.copytree(licenses, package_destination / "licenses", dirs_exist_ok=True)
+        # Conda recipes retain upstream source URLs and checksums alongside
+        # the exact installed binary package version/build.
+        recipe = cache / "info" / "recipe"
+        if recipe.is_dir():
+            shutil.copytree(recipe, package_destination / "recipe", dirs_exist_ok=True)
+        about = cache / "info" / "about.json"
+        if about.is_file():
+            shutil.copy2(about, package_destination / "about.json")
+        inventory.append({
+            "name": record["name"], "version": record["version"], "build": record.get("build", ""),
+            "license": record.get("license", ""), "package_url": record.get("url", ""),
+            "sha256": record.get("sha256", ""), "bundled_files": matched,
+        })
+    destination.mkdir(parents=True, exist_ok=True)
+    (destination / "inventory.json").write_text(json.dumps(inventory, indent=2) + "\n", encoding="utf-8")
+    return inventory
 
 
 def collect_licenses(stage: Path) -> None:
@@ -57,6 +110,13 @@ def collect_licenses(stage: Path) -> None:
                 break
     if not python_license_found:
         raise RuntimeError("Python licence not found; provide the interpreter's licence before distributing this build.")
+    native_packages = collect_native_conda_licenses(stage)
+    if native_packages:
+        notices += ["## Native libraries from Conda", "",
+                    "The following installed Conda packages supply binary files found in the PyInstaller analysis of these executables. Their notices, available source recipes and version/build metadata are preserved under `THIRD_PARTY_LICENSES/native-conda/`.", ""]
+        for package in native_packages:
+            notices.append(f"- {package['name']} {package['version']} ({package['build']}): {package['license']}")
+        notices.append("")
     notices += ["## Python", "", "See `THIRD_PARTY_LICENSES/Python-LICENSE.txt` for the Python licence and included copyright notices.", "",
                 "Third-party specimen images are not licensed by these software notices. Their individual source terms still apply.", ""]
     (stage / "THIRD_PARTY_NOTICES.md").write_text("\n".join(notices), encoding="utf-8")
@@ -80,6 +140,7 @@ def main() -> None:
                    "--specpath", str(ROOT / "build"),
                    "--paths", str(ROOT / project / "scripts"),
                    "--collect-submodules", "PIL",
+                   "--exclude-module", "readline",
                    "--add-data", f"{ROOT / 'VERSION.txt'}{os.pathsep}.",
                    "--add-data", f"{ROOT / project / 'config'}{os.pathsep}{resource}/config",
                    "--add-data", f"{ROOT / project / 'VERSION.txt'}{os.pathsep}{resource}"]
