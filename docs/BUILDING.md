@@ -25,7 +25,7 @@ Both frozen programs are started with `--help` and an offline `--dry-run` before
 `.github/workflows/tests.yml` runs on pushes, pull requests and manual dispatch. It:
 
 1. Tests the minimum Python version on Ubuntu.
-2. Runs the isolated offline suites on macOS 15 and Windows Server 2022 with Python 3.13.
+2. Runs the isolated offline suites on macOS 26 and Windows Server 2022 with Python 3.13. A local macOS 15 arm64 build is tested separately.
 3. Builds native executables and smoke-tests their packaged configuration.
 4. Uploads ZIP files and SHA-256 files as Actions artifacts.
 
