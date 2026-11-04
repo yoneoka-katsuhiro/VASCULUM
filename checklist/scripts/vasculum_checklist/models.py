@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import math
 import re
 from dataclasses import dataclass, field
 from datetime import datetime
@@ -73,8 +74,8 @@ class SearchArea:
         coords = [self.latitude is not None, self.longitude is not None, self.radius_km is not None]
         if any(coords) and not all(coords):
             raise ValueError("--latitude, --longitude, and --radius must be used together.")
-        if self.radius_km is not None and self.radius_km <= 0:
-            raise ValueError("--radius must be greater than 0 km.")
+        if self.radius_km is not None and (not math.isfinite(self.radius_km) or self.radius_km <= 0):
+            raise ValueError("--radius must be a finite number greater than 0 km.")
         if self.latitude is not None and not -90 <= self.latitude <= 90:
             raise ValueError("--latitude must be between -90 and 90.")
         if self.longitude is not None and not -180 <= self.longitude <= 180:

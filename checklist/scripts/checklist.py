@@ -12,7 +12,7 @@ from vasculum_checklist.pipeline import run_checklist
 from vasculum_checklist.runtime import load_env_file
 
 
-PROJECT_DIR = Path(__file__).resolve().parents[1]
+PROJECT_DIR = (Path(sys._MEIPASS) / "checklist") if getattr(sys, "frozen", False) else Path(__file__).resolve().parents[1]
 
 
 def split_csv(value: str) -> list[str]:
@@ -23,6 +23,7 @@ def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description="Create a VASCULUM CheckList species list from a geographic search."
     )
+    parser.add_argument("--version", action="version", version="VASCULUM CheckList " + (PROJECT_DIR / "VERSION.txt").read_text().strip())
     parser.add_argument("--country", default="", help="Country name or ISO 3166-1 alpha-2 code.")
     parser.add_argument("--state", default="", help="State, province, or equivalent region.")
     parser.add_argument("--prefecture", default="", help="Prefecture name; treated like a state/province filter.")
@@ -100,7 +101,7 @@ def parse_args() -> argparse.Namespace:
 
 
 def contact_email(args: argparse.Namespace) -> str:
-    load_env_file(PROJECT_DIR / ".env")
+    load_env_file((Path.cwd() if getattr(sys, "frozen", False) else PROJECT_DIR) / ".env")
     value = (args.contact_email or os.environ.get("CONTACT_EMAIL", "")).strip()
     if not value and sys.stdin.isatty():
         value = input("Contact email for database requests: ").strip()

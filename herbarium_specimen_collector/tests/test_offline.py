@@ -13,18 +13,16 @@ sys.path.insert(0, str(ROOT / "scripts"))
 
 from specimen_collector.html_utils import collect_image_candidates, collect_links
 from specimen_collector.http_client import format_bytes
-from specimen_collector.images import count_referenced_images, prune_unreferenced_images
+from specimen_collector.images import count_referenced_images, prune_unreferenced_images, gbif_image_cache_urls
 from specimen_collector.models import SpecimenRecord
 from specimen_collector.outputs import write_dwc_exports
 from specimen_collector.pipeline import (
-    collection_event_key,
     deduplicate,
-    gbif_image_cache_urls,
     image_download_settings,
     normalize_source_names,
 )
 from specimen_collector.progress import TerminalProgress
-from specimen_collector.records import image_basename, specimen_code
+from specimen_collector.records import image_basename, specimen_code, collection_event_key
 from specimen_collector.sources import (
     event_date_from_any,
     dwca_records,

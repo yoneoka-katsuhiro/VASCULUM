@@ -11,6 +11,8 @@ if ! command -v python3 >/dev/null 2>&1; then
   exit 1
 fi
 
+python3 -c 'import sys; sys.exit("Python 3.11 or newer is required.") if sys.version_info < (3, 11) else None'
+
 python3 -m venv "${VENV_DIR}"
 
 if ! "${VENV_DIR}/bin/python" -m pip --version >/dev/null 2>&1; then

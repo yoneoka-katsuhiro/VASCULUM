@@ -91,11 +91,18 @@ def destination_point(
 
 
 def circle_wkt(latitude: float, longitude: float, radius_km: float, segments: int = 72) -> str:
+    if radius_km >= math.radians(90 - abs(latitude)) * 6371.0088:
+        raise ValueError("Search circle crosses a pole; use smaller separate searches.")
     points = []
     for index in range(segments):
         lat, lon = destination_point(latitude, longitude, -index * 360 / segments, radius_km)
         points.append((lon, lat))
     points.append(points[0])
+    # A ring that crosses the date line is interpreted as the complementary
+    # polygon by planar API geometry parsers. Reject it instead of silently
+    # querying the wrong hemisphere; split polygons need a separate design.
+    if any(abs(left[0] - right[0]) > 180 for left, right in zip(points, points[1:])):
+        raise ValueError("Search circle crosses the antimeridian or a pole; use smaller separate searches.")
     coordinates = ", ".join(f"{lon:.6f} {lat:.6f}" for lon, lat in points)
     return f"POLYGON(({coordinates}))"
 
@@ -110,6 +117,7 @@ def distance_km(lat1: float, lon1: float, lat2: float, lon2: float) -> float:
         math.sin(d_phi / 2) ** 2
         + math.cos(phi1) * math.cos(phi2) * math.sin(d_lambda / 2) ** 2
     )
+    a = min(1.0, max(0.0, a))  # Round-off can otherwise fail near antipodes.
     return 2 * radius_km * math.atan2(math.sqrt(a), math.sqrt(1 - a))
 
 
@@ -144,6 +152,8 @@ def record_matches_area(record: EvidenceRecord, area: SearchArea) -> bool:
             lon = float(record.decimal_longitude)
         except ValueError:
             return False
+        if not (-90 <= lat <= 90 and -180 <= lon <= 180):
+            return False  # Also rejects NaN and infinite portal coordinates.
         if distance_km(area.latitude, area.longitude, lat, lon) > area.radius_km:
             return False
     return True

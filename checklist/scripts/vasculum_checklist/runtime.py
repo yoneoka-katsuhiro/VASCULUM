@@ -29,5 +29,5 @@ def load_env_file(path: Path) -> None:
 
 
 def vasculum_version(project_dir: Path) -> str:
-    version_file = project_dir / "VERSION.txt"
+    version_file = project_dir.parent / "VERSION.txt"
     return version_file.read_text(encoding="utf-8").strip() if version_file.exists() else "unknown"

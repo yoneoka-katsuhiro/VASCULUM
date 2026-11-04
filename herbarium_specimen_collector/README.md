@@ -5,13 +5,15 @@ name, merges duplicate portal records that represent the same physical
 specimen, and downloads linked specimen images at a practical research
 resolution.
 
-Version: `v0.1.18`
+Version: `v0.1.19`
 
 ## Requirements
 
-- macOS or Linux
-- Python 3.9 or newer
+- macOS, Windows, or Linux
+- Python 3.11 or newer
 - A contact email for polite HTTP identification
+
+For Windows and standalone downloads, see the [English manual](../docs/MANUAL_EN.md) or [日本語マニュアル](../docs/MANUAL_JA.md).
 
 ## Setup
 
@@ -102,7 +104,9 @@ automatic log file is retained. `dwc.csv` and `dwc.tsv` contain the same Darwin
 Core-oriented rows with different delimiters. `summary.txt` contains counts,
 per-source status, retries, and errors.
 
-Use `--output PATH` to choose another output directory.
+Use `--output PATH` to choose another output directory. Partial results use
+`dwc.partial.csv`, `dwc.partial.tsv` and `summary.partial.txt`, preserving previous
+complete exports; the CLI prints the exact paths and exits with code `3`.
 
 ## Human Review With `miss_`
 
@@ -123,7 +127,7 @@ undone. This is a human review step, not automated taxonomic validation.
 ## Reusing Outputs From Earlier Releases
 
 Collector outputs created with recent releases, including v0.1.7 and v0.1.8,
-can be reused with v0.1.18. A reusable taxon directory should contain the DwC
+can be reused with v0.1.19. A reusable taxon directory should contain the DwC
 table and its image folder:
 
 ```text
@@ -137,7 +141,7 @@ VASCULUM/
         images/
 ```
 
-`VASCULUM/output/` is not the standard collector output location. If an older
+For source execution, `VASCULUM/output/` is not the standard collector output location. Standalone executables instead use the current working directory; prefer an explicit `--output`. If an older
 working copy has `output/` directly under `VASCULUM/`, move it before rerunning
 the standard collector commands:
 
@@ -151,9 +155,10 @@ JPEGs with the expected names are inspected first. Valid images are reported as
 files, files below the configured minimum size, or files with unexpected names
 need to be downloaded again.
 
-By default, v0.1.8 and later remove JPEGs in `images/` that are not referenced
-by the current DwC rows at the end of a run. Use `--keep-unreferenced-images`
-when you intentionally want to keep extra images from an earlier dataset:
+Version 0.1.19 retains existing images by default. `--keep-unreferenced-images`
+remains accepted for compatibility. To deliberately delete unreferenced JPEGs
+after a complete run, back up the directory and use `--prune-unreferenced-images`.
+Partial runs never prune images. The following command preserves older images:
 
 ```bash
 bash run_collect_specimens.sh \

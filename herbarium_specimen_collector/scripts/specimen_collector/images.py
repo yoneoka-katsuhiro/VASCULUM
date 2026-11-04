@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import hashlib
+import os
+import tempfile
 from collections import Counter
 from dataclasses import dataclass
 from io import BytesIO
@@ -107,9 +109,16 @@ def image_file_info(path: Path) -> tuple[str, int, int, int]:
 def resize_existing_image(path: Path, max_dimension: int, jpeg_quality: int) -> None:
     with Image.open(path) as image:
         image.load()
-        if max_dimension > 0:
-            image.thumbnail((max_dimension, max_dimension), Image.Resampling.LANCZOS)
-        image.convert("RGB").save(path, "JPEG", quality=jpeg_quality, optimize=True)
+        if max_dimension <= 0 or max(image.size) <= max_dimension:
+            return  # Reusing a JPEG must not apply another lossy compression.
+        image.thumbnail((max_dimension, max_dimension), Image.Resampling.LANCZOS)
+        with tempfile.NamedTemporaryFile(dir=path.parent, suffix=".jpg", delete=False) as handle:
+            temporary = Path(handle.name)
+        try:
+            image.convert("RGB").save(temporary, "JPEG", quality=jpeg_quality, optimize=True)
+            os.replace(temporary, path)
+        finally:
+            temporary.unlink(missing_ok=True)
 
 
 def taif_pyramid_levels(width: int, height: int, tile_size: int) -> list[dict[str, int]]:
@@ -309,8 +318,9 @@ def download_images(
                 result.existing += 1
                 successful[source] += 1
             except Exception as exc:
-                destination.unlink(missing_ok=True)
                 record.notes = append_note(record.notes, f"existing image rejected: {exc}")
+                # Keep the previous file until a separately downloaded and
+                # validated temporary image can atomically replace it.
 
         if record.download_status != "already_downloaded":
             failures: list[str] = []

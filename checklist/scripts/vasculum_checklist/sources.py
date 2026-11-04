@@ -194,7 +194,6 @@ CVH_COUNTRY_CODE_ALIASES = {
     "越南": "VN",
     "越南社会主义共和国": "VN",
     "越南社會主義共和國": "VN",
-    "越南": "VN",
     "也门": "YE",
     "也門": "YE",
 }
@@ -269,7 +268,7 @@ def resolve_taxon_key(
         confidence = int(data.get("confidence") or 0)
         if key and status.upper() != "DOUBTFUL" and confidence >= 80:
             scientific_name = value_to_str(data.get("scientificName") or data.get("canonicalName") or candidate)
-            resolved_rank = value_to_str(data.get("rank") or rank)
+            resolved_rank = value_to_str(data.get("rank"))
             return ResolvedTaxon(
                 key=key,
                 name=scientific_name,

@@ -3,6 +3,27 @@
 User-facing changes by release, following [Keep a Changelog](https://keepachangelog.com/).
 Detailed notes and validation records for each release are in [docs/releases/](docs/releases/).
 
+## [0.1.19] - 2026-11-05
+
+### Fixed
+- Preserve existing photos by default and prevent pruning after incomplete runs; preserve previous tables on complete collection failure and write partial results separately.
+- Reject invalid geographic coordinates/radii and unsupported date-line or polar-crossing circles before querying.
+- Handle GBIF taxon matches with a missing rank without crashing.
+- Reuse already-sized JPEGs without recompressing them; resize through an atomic replacement.
+- Use suitable Windows/Linux PDF fonts and respect fallback font sizes.
+- Detect Codex CLI capabilities and resolve Windows native command paths.
+- Correct checklist completion timing and overall version provenance.
+
+### Added
+- Offline checklist/PDF and collector-preservation regression tests.
+- Native macOS Apple silicon and Windows x64 build jobs, standalone CLI packaging, checksums and build manifests.
+- English/Japanese illustrated overviews and manuals, a maintenance audit and a prioritized roadmap.
+
+### Changed
+- Runtime dependency updates address known package advisories; Python 3.11 or newer is required.
+- Cleanup is opt-in with `--prune-unreferenced-images`; CVH-only checklists fail validation.
+- CheckList component version is 0.1.3. See [release notes](docs/releases/RELEASE_NOTES_v0.1.19.md).
+
 ## [0.1.18] - 2026-11-02
 
 ### Removed

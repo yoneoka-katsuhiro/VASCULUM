@@ -1,110 +1,84 @@
 # VASCULUM
 
-Collect herbarium specimen records and photographs from public databases and
-build visual checklists, so that occurrence data stay linked to the specimens
-behind them.
+**Find herbarium specimens, keep their evidence, and build illustrated plant checklists.**
 
-Version: `v0.1.18` · [Changelog](CHANGELOG.md) · [How to cite](#citation)
+[日本語](README_ja.md) · [English manual](docs/MANUAL_EN.md) · [Download](https://github.com/yoneoka-katsuhiro/VASCULUM/releases/latest) · [Changes](CHANGELOG.md)
 
-*VASCULUM* is the botanist's field collecting case; here it is a virtual one
-(Voucher Archive Search and Curation for Unified Large-scale Use of Metadata).
+VASCULUM searches public herbarium databases and keeps specimen photographs linked to their source records. Its collector merges repeated portal records of the same specimen and exports Darwin Core tables. Its checklist tool builds a regional species list from GBIF records and prepares an illustrated PDF for human review.
 
-## Pipelines
+Version **0.1.19**. The name refers to a botanist's collecting case: a virtual case for specimen evidence.
 
-| Directory | What it does | Main output |
+## See the output
+
+These are actual pages from the existing southern Philippines fern example in this repository. The specimen photographs and their source references appear together in the generated checklist. This gallery illustrates a previous run; it is not a new validation of the records or identifications.
+
+<p>
+<a href=".github/assets/checklist-gallery/philippines_fern_checklist_cover.png"><img src=".github/assets/checklist-gallery/thumbs/philippines_fern_checklist_cover_thumb.png" width="220" alt="Cover of an actual southern Philippines fern checklist"></a>
+<a href=".github/assets/checklist-gallery/philippines_fern_checklist_hymenophyllaceae.png"><img src=".github/assets/checklist-gallery/thumbs/philippines_fern_checklist_hymenophyllaceae_thumb.png" width="220" alt="Actual Hymenophyllaceae page with specimen photographs and references"></a>
+<a href=".github/assets/checklist-gallery/philippines_fern_checklist_index.png"><img src=".github/assets/checklist-gallery/thumbs/philippines_fern_checklist_index_thumb.png" width="220" alt="Scientific-name index in the generated checklist"></a>
+</p>
+
+## Choose a tool
+
+| Tool | You supply | You receive |
 | --- | --- | --- |
-| [`herbarium_specimen_collector/`](herbarium_specimen_collector/README.md) | Searches GBIF, CVH and 20+ herbarium portals by scientific name, merges duplicates of the same specimen and downloads the specimen photos | `dwc.csv`, `images/` |
-| [`checklist/`](checklist/README.md) | Lists the species of a country or a circle around a point and renders an illustrated checklist PDF | checklist PDF |
+| `vasculum-collect` | A scientific name, optional synonyms and source selection | `dwc.csv`, `dwc.tsv`, specimen images and a run summary |
+| `vasculum-checklist` | A country or a geographic circle and a taxonomic group | Species tables, evidence records and an illustrated checklist PDF |
 
-After collecting, look at the photos and mark misidentified specimens by
-renaming a photo with a `miss_` prefix. The LLM georeference curator of
-earlier versions has been removed (see the [changelog](CHANGELOG.md)); coordinates
-in the DwC exports are those supplied by the portals.
+Both are **command-line tools**. Open Terminal on macOS or PowerShell on Windows. The collector does not require an AI account. The checklist additionally requires an installed, authenticated Codex CLI; it asks before starting image evaluation, which can incur usage charges. AI image ranking does not confirm a specimen's identification.
 
-## Requirements
+## Download and run
 
-- macOS (the collector and checklist also run on Linux)
-- Python 3.9 or newer
-- For the checklist: Codex CLI access, used to pick representative specimen
-  images (see the [checklist README](checklist/README.md))
+Open [GitHub Releases](https://github.com/yoneoka-katsuhiro/VASCULUM/releases/latest) and choose the asset for your computer:
 
-## Installation
+| Computer | Release asset |
+| --- | --- |
+| macOS, Apple silicon | `VASCULUM-v0.1.19-macOS-arm64.zip` |
+| Windows, 64-bit Intel/AMD | `VASCULUM-v0.1.19-Windows-x64.zip` |
+| Other systems or development | Source code; Python 3.11 or newer |
 
-Download `VASCULUM-v0.1.18.zip` from
-[GitHub Releases](https://github.com/yoneoka-katsuhiro/VASCULUM/releases) and unzip it, or clone the repository. Then:
+Extract the entire ZIP. The standalone programs include Python and their Python dependencies. Codex CLI is a separate installation. These binaries are not notarized by Apple or signed with a Windows publisher certificate. For installation, checksum verification and operating-system prompts, use the [manual](docs/MANUAL_EN.md#installation).
 
-```bash
-cd VASCULUM
-bash setup_mac.sh
-```
-
-Setup creates a separate Python environment for each pipeline and finishes with
-the offline test suite
-(`Release checks passed: … tests`). Nothing is sent to external services.
-
-## Quick start
-
-Collect the specimens of one species (the first run asks for a contact email,
-which is sent to the portals as polite identification):
+From the extracted directory, validate a small request without network access:
 
 ```bash
-cd herbarium_specimen_collector
-bash run_collect_specimens.sh --taxon "Haplopteris mediosora" --synonym "Vittaria mediosora"
+# macOS (replace with your contact address)
+./vasculum-collect --dry-run --taxon "Haplopteris mediosora" --contact-email "you@example.org"
 ```
 
-This writes `dwc.csv`, `dwc.tsv`, `summary.txt` and `images/` to
-`herbarium_specimen_collector/output/Haplopteris_mediosora/`. Each pipeline
-README explains its options.
+```powershell
+# Windows PowerShell
+.\vasculum-collect.exe --dry-run --taxon "Haplopteris mediosora" --contact-email "you@example.org"
+```
 
-## Checklist example
+Remove `--dry-run` and add `--sources gbif --limit 10 --skip-images` for a small metadata trial. Real collection sends your contact address in the HTTP User-Agent to the queried services. Start a new output directory for each research run; for example, add `--output "results/mediosora-trial"`.
 
-A southern Philippines fern checklist (603 species; 4 h 14 min on a Mac mini).
-Scroll sideways and click a page to enlarge it.
+## Research methods and limits
 
-<table>
-  <tr>
-    <td width="240" align="center" valign="top"><a href=".github/assets/checklist-gallery/philippines_fern_checklist_cover.png"><img src=".github/assets/checklist-gallery/thumbs/philippines_fern_checklist_cover_thumb.png" width="240" alt="Cover page for the southern Philippines fern CheckList"></a></td>
-    <td width="240" align="center" valign="top"><a href=".github/assets/checklist-gallery/philippines_fern_checklist_search_maps.png"><img src=".github/assets/checklist-gallery/thumbs/philippines_fern_checklist_search_maps_thumb.png" width="240" alt="Search-area maps for the southern Philippines fern CheckList"></a></td>
-    <td width="240" align="center" valign="top"><a href=".github/assets/checklist-gallery/philippines_fern_checklist_species_counts.png"><img src=".github/assets/checklist-gallery/thumbs/philippines_fern_checklist_species_counts_thumb.png" width="240" alt="Taxonomic species counts in the southern Philippines fern CheckList"></a></td>
-    <td width="240" align="center" valign="top"><a href=".github/assets/checklist-gallery/philippines_fern_checklist_hymenophyllaceae.png"><img src=".github/assets/checklist-gallery/thumbs/philippines_fern_checklist_hymenophyllaceae_thumb.png" width="240" alt="Hymenophyllaceae page from the southern Philippines fern CheckList"></a></td>
-    <td width="240" align="center" valign="top"><a href=".github/assets/checklist-gallery/philippines_fern_checklist_lindsaeaceae.png"><img src=".github/assets/checklist-gallery/thumbs/philippines_fern_checklist_lindsaeaceae_thumb.png" width="240" alt="Lindsaeaceae page from the southern Philippines fern CheckList"></a></td>
-    <td width="240" align="center" valign="top"><a href=".github/assets/checklist-gallery/philippines_fern_checklist_thelypteridaceae.png"><img src=".github/assets/checklist-gallery/thumbs/philippines_fern_checklist_thelypteridaceae_thumb.png" width="240" alt="Thelypteridaceae page from the southern Philippines fern CheckList"></a></td>
-    <td width="240" align="center" valign="top"><a href=".github/assets/checklist-gallery/philippines_fern_checklist_athyriaceae.png"><img src=".github/assets/checklist-gallery/thumbs/philippines_fern_checklist_athyriaceae_thumb.png" width="240" alt="Athyriaceae page from the southern Philippines fern CheckList"></a></td>
-    <td width="240" align="center" valign="top"><a href=".github/assets/checklist-gallery/philippines_fern_checklist_polypodiaceae.png"><img src=".github/assets/checklist-gallery/thumbs/philippines_fern_checklist_polypodiaceae_thumb.png" width="240" alt="Polypodiaceae page from the southern Philippines fern CheckList"></a></td>
-    <td width="240" align="center" valign="top"><a href=".github/assets/checklist-gallery/philippines_fern_checklist_index.png"><img src=".github/assets/checklist-gallery/thumbs/philippines_fern_checklist_index_thumb.png" width="240" alt="Scientific-name index from the southern Philippines fern CheckList"></a></td>
-  </tr>
-</table>
+- The collector merges records using specimen identifiers. It preserves coordinate and image provenance from one supplying record instead of mixing unrelated metadata. Review possible identity collisions when institutions reuse or inconsistently format catalogue numbers.
+- Coordinates are portal-supplied. VASCULUM does not infer or correct coordinates, establish coordinate accuracy, or authenticate identifications.
+- GBIF supplies checklist regional evidence. CVH supplies additional representative-image candidates; an image from outside the region does not establish occurrence inside it.
+- Scan limits, incomplete digitization and portal failures make checklists incomplete. An absent record does not demonstrate biological absence. Check the summary and exit code `3` before using a result. Collector partial runs use `dwc.partial.*` and `summary.partial.txt` to preserve complete exports.
+- Existing images are retained by default. `--prune-unreferenced-images` is an explicit cleanup option and never runs after a reported partial failure. Files prefixed with `miss_` retain the user's exclusion decisions.
+- Circle searches that cross the antimeridian or a pole are rejected until split-geometry support is implemented.
 
-## Data sources
+[English instructions](docs/MANUAL_EN.md) and [日本語マニュアル](docs/MANUAL_JA.md) explain the workflow, outputs, review procedure and troubleshooting. [Audit findings](docs/AUDIT.md) separate verified behavior from remaining limitations; [the roadmap](docs/ROADMAP.md) proposes further improvements.
 
-The portals and services used are listed in [CITATIONS.md](CITATIONS.md). Cite
-the herbaria and datasets behind the records you use, not only this software;
-the DwC exports keep each record's institution, dataset and licence.
-
-## Limits
-
-- Records and coordinates are taken as supplied by each portal. Coordinate
-  precision, datum and georeferencing provenance are kept in the DwC columns
-  when the portal provides them, but are not checked or corrected.
-- Portal contents change, so a later run may return different records.
-
-## Development
-
-Run the offline checks before committing or releasing:
+## Develop and verify
 
 ```bash
-bash check_release.sh
+python3 -m venv .venv
+.venv/bin/python -m pip install -r requirements-build.txt -c constraints-build.txt
+.venv/bin/python scripts/check_release.py
+.venv/bin/python scripts/build_release.py
 ```
 
-GitHub Actions runs the same tests on every push. Generated outputs, caches,
-virtual environments and `.env` files are excluded by `.gitignore`.
+Use `.venv\Scripts\python.exe` on Windows. [Build instructions](docs/BUILDING.md) explain the native release jobs. CI tests Python 3.11 and builds with Python 3.13 on macOS and Windows. Each platform runs the offline regressions and the frozen programs' help and configuration checks before producing an artifact.
 
-## Citation
+The maintenance approach follows [ai-biocode-kata](https://github.com/dritoshi/ai-biocode-kata/tree/main/chapters): small changes, explicit contracts, regression tests, fixed environments and traceable results.
 
-Cite the software with the metadata in [CITATION.cff](CITATION.cff) (GitHub's
-"Cite this repository" button), including the version you used, and cite the
-data sources as described above.
+## Cite and reuse
 
-## License
+Use [CITATION.cff](CITATION.cff) to cite this software and include its version. Cite the herbaria and datasets behind the records as described in [CITATIONS.md](CITATIONS.md). Check each image's own licence before redistribution; the software's MIT licence does not license third-party specimen images.
 
-MIT License; see [LICENSE](LICENSE).
+Software: [MIT License](LICENSE).

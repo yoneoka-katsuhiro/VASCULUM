@@ -9,7 +9,7 @@ from pathlib import Path
 from specimen_collector.pipeline import load_env_file, run_pipeline
 
 
-PROJECT_DIR = Path(__file__).resolve().parents[1]
+PROJECT_DIR = (Path(sys._MEIPASS) / "collector") if getattr(sys, "frozen", False) else Path(__file__).resolve().parents[1]
 
 
 def split_csv(value: str) -> list[str]:
@@ -20,6 +20,7 @@ def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description="VASCULUM: collect public herbarium specimen metadata and images."
     )
+    parser.add_argument("--version", action="version", version="VASCULUM " + (PROJECT_DIR / "VERSION.txt").read_text().strip())
     parser.add_argument("--taxon", help="Accepted scientific name.")
     parser.add_argument(
         "--synonym",
@@ -69,14 +70,16 @@ def parse_args() -> argparse.Namespace:
         action="store_true",
         help="Validate arguments, dependencies, and configuration without network access.",
     )
-    parser.add_argument(
+    cleanup = parser.add_mutually_exclusive_group()
+    cleanup.add_argument(
         "--keep-unreferenced-images",
         action="store_true",
-        help=(
-            "Do not delete JPEGs in output/images that the current DwC no longer "
-            "references (e.g. images from earlier runs). By default these are "
-            "pruned so the folder count equals the reported image count."
-        ),
+        help="Keep older unreferenced images (the default; retained for compatibility).",
+    )
+    cleanup.add_argument(
+        "--prune-unreferenced-images",
+        action="store_true",
+        help="Delete unreferenced JPEGs only after a complete run. Back up the output first.",
     )
     parser.add_argument(
         "--gbif-occurrence-mode",
@@ -94,7 +97,7 @@ def parse_args() -> argparse.Namespace:
 
 
 def contact_email(args: argparse.Namespace) -> str:
-    load_env_file(PROJECT_DIR / ".env")
+    load_env_file((Path.cwd() if getattr(sys, "frozen", False) else PROJECT_DIR) / ".env")
     value = (args.contact_email or os.environ.get("CONTACT_EMAIL", "")).strip()
     if not value and sys.stdin.isatty():
         value = input("Contact email for database requests: ").strip()
@@ -125,7 +128,7 @@ def main() -> int:
             output_dir=args.output,
             gbif_occurrence_mode=args.gbif_occurrence_mode,
             gbif_coordinate_filter=args.gbif_coordinate_filter,
-            keep_unreferenced_images=args.keep_unreferenced_images,
+            keep_unreferenced_images=not args.prune_unreferenced_images,
         )
     except (KeyboardInterrupt, EOFError):
         print("\nInterrupted.", file=sys.stderr)
@@ -142,10 +145,10 @@ def main() -> int:
         return 0
 
     print(f"Output: {report.output_dir}")
-    print(f"DwC CSV: {report.output_dir / 'dwc.csv'}")
-    print(f"DwC TSV: {report.output_dir / 'dwc.tsv'}")
+    print(f"DwC CSV: {report.output_dir / (report.export_stem + '.csv')}")
+    print(f"DwC TSV: {report.output_dir / (report.export_stem + '.tsv')}")
     print(f"Images: {report.output_dir / 'images'}")
-    print(f"Summary: {report.output_dir / 'summary.txt'}")
+    print(f"Summary: {report.output_dir / report.summary_filename}")
     print(
         "Totals: "
         f"{report.records_found:,} records found | "
@@ -157,12 +160,12 @@ def main() -> int:
     if unreferenced > 0:
         print(
             f"Note: {unreferenced:,} JPEG(s) in output/images are not referenced "
-            "by the current DwC (kept via --keep-unreferenced-images or from an "
-            "earlier run)."
+            "by the current DwC (retained from an earlier run)."
         )
     if report.partial_failure:
         print(
-            f"Completed with {len(report.errors)} error(s); see summary.txt.",
+            f"Completed with {len(report.errors)} error(s); see {report.summary_filename}. "
+            "Partial exports use dwc.partial.*; previous complete exports were preserved.",
             file=sys.stderr,
         )
         return 3

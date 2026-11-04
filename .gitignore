@@ -13,3 +13,8 @@ coverage.xml
 .DS_Store
 output/
 *.zip
+
+.venv-build/
+build/
+dist/
+*.spec

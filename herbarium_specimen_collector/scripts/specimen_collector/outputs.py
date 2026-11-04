@@ -46,6 +46,14 @@ class RunReport:
     def records_written(self) -> int:
         return sum(record.download_status != "excluded_manual_misidentification" for record in self.records)
 
+    @property
+    def export_stem(self) -> str:
+        return "dwc.partial" if self.partial_failure else "dwc"
+
+    @property
+    def summary_filename(self) -> str:
+        return "summary.partial.txt" if self.partial_failure else "summary.txt"
+
 
 def dwc_row(record: SpecimenRecord, accepted_name: str) -> dict[str, str]:
     code = specimen_code(record)
@@ -116,9 +124,9 @@ def write_dwc(path: Path, records: list[SpecimenRecord], accepted_name: str, del
             writer.writerow(dwc_row(record, accepted_name))
 
 
-def write_dwc_exports(output_dir: Path, records: list[SpecimenRecord], accepted_name: str) -> None:
-    write_dwc(output_dir / "dwc.csv", records, accepted_name, ",")
-    write_dwc(output_dir / "dwc.tsv", records, accepted_name, "\t")
+def write_dwc_exports(output_dir: Path, records: list[SpecimenRecord], accepted_name: str, *, stem: str = "dwc") -> None:
+    write_dwc(output_dir / f"{stem}.csv", records, accepted_name, ",")
+    write_dwc(output_dir / f"{stem}.tsv", records, accepted_name, "\t")
 
 
 def write_summary(path: Path, report: RunReport) -> None:
@@ -169,9 +177,9 @@ def write_summary(path: Path, report: RunReport) -> None:
     if unreferenced_images > 0:
         lines.append(
             "  (These are not referenced by the current DwC. They were kept "
-            "because --keep-unreferenced-images was set or a previous run left "
-            "them. miss_ review markers are deliberately preserved; other "
-            "unreferenced JPEGs are pruned unless that option is set.)"
+            "by the default preservation policy or because a run was incomplete. "
+            "Explicit --prune-unreferenced-images removes these only after a complete "
+            "run; miss_ review markers are always preserved.)"
         )
     if manually_excluded:
         lines.extend(("", "Manual misidentification exclusions (original marked files preserved):"))
@@ -198,7 +206,7 @@ def write_summary(path: Path, report: RunReport) -> None:
 
     lines.extend(["", f"Errors: {len(report.errors)}"])
     lines.extend(f"- {error}" for error in report.errors)
-    dwc_path = report.output_dir / "dwc.tsv"
+    dwc_path = report.output_dir / f"{report.export_stem}.tsv"
     if dwc_path.is_file():
         group = lambda source: source.upper() if source.lower() in {"gbif", "cvh"} else "Other"
         retrieved = Counter()
